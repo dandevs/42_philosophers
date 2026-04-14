@@ -83,10 +83,6 @@ bin/
 valgrind*.txt
 *.vgcore
 
-# Test files (if any)
-test/
-tests/
-
 # Backup files
 *.bak
 *.backup
