@@ -1,16 +1,64 @@
 ## Project Structure
 
 ```
-philo/
+42_philisophers/
 ├── Makefile
-├── *.h
-└── *.c
+├── AGENTS.md
+└── src/
+    ├── lib.h          — Core types: t_fork, t_philosopher, t_config, t_table
+    ├── main.c         — Entry point: parse args, create/destroy table
+    ├── utils.h        — Forward declarations for utils.c
+    └── utils.c        — Argument validation and parsing (is_valid_number, parse_argument, parse_arguments)
 
-philo_bonus/ (optional)
+philo_bonus/ (not yet started)
 ├── Makefile
-├── *.h
-└── *.c
+├── *_bonus.h
+└── *_bonus.c
 ```
+
+### Source Files Detail
+
+| File | Functions | Description |
+|------|-----------|-------------|
+| `src/lib.h` | — | Defines `t_fork` (pthread_mutex_t lock), `t_philosopher` (left/right fork pointers), `t_config` (philosophers_count, time_to_die/eat/sleep, meals_required), `t_table` (philosophers array, forks array, count) |
+| `src/main.c` | `create_table()`, `destroy_table()`, `main()` | Allocates philosophers/forks arrays, assigns circular fork pointers, handles arg parse errors with printf |
+| `src/utils.h` | — | Forward declarations: `is_valid_number()`, `parse_argument()`, `parse_arguments()` |
+| `src/utils.c` | `is_valid_number()`, `parse_argument()`, `parse_arguments()` | Validates positive integer strings, converts via atoi (TEMPORARY), populates t_config. No printf — error printing is in main.c |
+
+### Struct Layout
+
+```
+t_fork:          pthread_mutex_t lock
+t_philosopher:   t_fork *fork_left, *fork_right
+t_config:        philosophers_count, time_to_die, time_to_eat, time_to_sleep, meals_required (-1 if unset)
+t_table:         *philosophers, *forks, count
+```
+
+### Current Implementation Status
+
+| Feature | Status |
+|---------|--------|
+| Argument parsing & validation | **Done** |
+| Struct definitions | **Skeleton** — missing many fields |
+| Table allocation + fork assignment (circular) | **Done** |
+| Mutex initialization (`pthread_mutex_init`) | **Missing** |
+| Thread creation (`pthread_create`) | **Missing** |
+| Philosopher routine (eat/sleep/think loop) | **Missing** |
+| Death detection / monitor thread | **Missing** |
+| Timestamp logging (`gettimeofday`) | **Missing** |
+| Print mutex (synchronized output) | **Missing** |
+| Meal counting + stop condition | **Missing** |
+| Single-philosopher edge case | **Missing** |
+| Thread joining + cleanup | **Missing** |
+| `atoi` removal (required before evaluation) | **TODO** |
+
+### Known Issues / TODO
+
+- `t_philosopher` is missing: `pthread_t` thread handle, `int id`, back-pointer to table/config, `last_meal_time`, `meals_eaten`, alive state, per-philosopher mutex
+- `t_table` is missing: `t_config`, `pthread_mutex_t print_mutex`, `start_time`, `int someone_died` flag, `pthread_t *threads` array
+- Fork assignment is symmetric (philosopher i → forks[i] left, forks[(i+1)%n] right) — needs asymmetric pickup order to avoid deadlock
+- `atoi` is used in `parse_argument()` — must be replaced with a custom implementation before evaluation
+- Error printf is in `main.c`, not in `utils.c` (parse_arguments returns 0 on error, main prints)
 
 ---
 
