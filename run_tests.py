@@ -2,12 +2,13 @@
 """
 Test runner for 42_philosophers project.
 
-Discovers test suites under tests/, compiles each test in parallel,
-then runs them sequentially with colored output.
+Compiles project sources once into a static archive, then links each
+test against it — reducing compilation from N×S to S+N.
 
 Usage:
-    python3 run_tests.py              # run all tests
+    python3 run_tests.py              # run all tests (auto-detects ccache)
     python3 run_tests.py table_create # run only the table_create suite
+    python3 run_tests.py --disable-ccache  # force disable ccache
 """
 
 import glob
@@ -28,9 +29,6 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 TESTS_DIR = os.path.join(PROJECT_ROOT, "tests")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "test_build")
-
-CC = "cc"
-CFLAGS = ["-I" + SRC_DIR]
 
 
 def get_project_sources():
@@ -55,8 +53,33 @@ def discover_tests(suite):
     return sorted(glob.glob(os.path.join(suite_dir, "*.c")))
 
 
-def compile_test(test_file, project_sources, output_binary):
-    cmd = [CC] + CFLAGS + [test_file] + project_sources + ["-o", output_binary]
+def build_project_lib(project_sources, build_dir, use_ccache):
+    cc = ["ccache", "cc"] if use_ccache else ["cc"]
+    obj_dir = os.path.join(build_dir, "obj")
+    os.makedirs(obj_dir, exist_ok=True)
+
+    obj_files = []
+    for src in project_sources:
+        rel = os.path.relpath(src, SRC_DIR)
+        obj = os.path.join(obj_dir, os.path.splitext(rel)[0] + ".o")
+        os.makedirs(os.path.dirname(obj), exist_ok=True)
+        cmd = cc + ["-O0", "-I" + SRC_DIR, "-c", src, "-o", obj]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return None, result.stderr
+        obj_files.append(obj)
+
+    lib_path = os.path.join(build_dir, "libproject.a")
+    cmd = ["ar", "rcs", lib_path] + obj_files
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None, result.stderr
+    return lib_path, None
+
+
+def compile_test(test_file, lib_path, output_binary, use_ccache):
+    cc = ["ccache", "cc"] if use_ccache else ["cc"]
+    cmd = cc + ["-O0", "-I" + SRC_DIR, test_file, lib_path, "-o", output_binary]
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.returncode == 0, result.stderr
 
@@ -74,6 +97,14 @@ def run_test(binary_path):
 
 
 def main():
+    use_ccache = "--disable-ccache" not in sys.argv
+    if "--disable-ccache" in sys.argv:
+        sys.argv.remove("--disable-ccache")
+
+    if use_ccache:
+        if shutil.which("ccache") is None:
+            use_ccache = False
+
     suites = discover_suites()
 
     if len(sys.argv) > 1:
@@ -92,6 +123,15 @@ def main():
     project_sources = get_project_sources()
     os.makedirs(BUILD_DIR, exist_ok=True)
 
+    lib_path, lib_error = build_project_lib(project_sources, BUILD_DIR, use_ccache)
+    if lib_path is None:
+        print(f"  {RED}Failed to build project library:{RESET}")
+        if lib_error and lib_error.strip():
+            for line in lib_error.strip().split("\n"):
+                print(f"      {YELLOW}→ {line}{RESET}")
+        shutil.rmtree(BUILD_DIR, ignore_errors=True)
+        sys.exit(1)
+
     compile_jobs = []
     for suite in suites:
         tests = discover_tests(suite)
@@ -105,7 +145,9 @@ def main():
     with ProcessPoolExecutor(max_workers=cpu_count) as executor:
         futures = {}
         for suite, test_name, test_file, binary in compile_jobs:
-            future = executor.submit(compile_test, test_file, project_sources, binary)
+            future = executor.submit(
+                compile_test, test_file, lib_path, binary, use_ccache
+            )
             futures[future] = (suite, test_name, binary)
 
         for future in futures:
