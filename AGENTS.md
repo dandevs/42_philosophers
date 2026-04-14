@@ -50,6 +50,10 @@ For bonus:
 - `fork`, `kill`, `exit`, `waitpid`
 - `sem_open`, `sem_close`, `sem_post`, `sem_wait`, `sem_unlink`
 
+### (DANGEROUS) TEMPORARY FUNCTIONS
+Remove these before evaluation!
+- `atoi`
+
 ---
 
 ## Problem Overview
@@ -199,3 +203,57 @@ Language: English
 4. **Memory leaks** - Clean up all resources on exit
 5. **Message overlap** - Protect printf calls with mutex
 6. **Philosopher starvation** - Ensure fair fork access
+
+---
+
+## Gotchas & Pitfalls (from 42 student experience)
+
+### Timing & Precision
+
+- **`usleep()` is not precise.** `usleep(200000)` may wake up at 205ms or later. The OS scheduler doesn't guarantee exact wake-up. Use a polling loop (check + short `usleep(500)`) instead of one long sleep when precision matters.
+- **Death detection must be within 10ms.** If your monitor loop checks every 10ms, you're already at the limit. Check every ~0.5ms (500μs). This is the #1 reason projects fail evaluation.
+- **`gettimeofday()` returns microseconds, arguments are in milliseconds.** Mixing these up causes off-by-1000x bugs. Always convert: `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
+- **Timestamps must be relative to simulation start**, not epoch time. Compute once at start, subtract on every print.
+
+### Thread Start Synchronization
+
+- **All philosophers must not start eating at the exact same instant.** Without staggering, every philosopher grabs their left fork simultaneously → instant deadlock with odd-count tables. Use a small initial delay for even-numbered philosophers (`usleep(1000)`).
+- **`start_time` must be recorded BEFORE launching threads**, and every philosopher's `last_meal_time` initialized to `start_time`. If you record start time after thread creation, philosophers may already be running and calculating wrong death times.
+- **Thread creation is not instantaneous.** By the time `pthread_create` returns for philosopher 5, philosopher 1 may have already been running for milliseconds. This asymmetry can cause false deaths if `last_meal_time` isn't properly initialized.
+
+### Death & Termination
+
+- **A philosopher who dies during `usleep` must still be detected.** If you use raw `usleep()` for eating/sleeping, the death won't be caught until the sleep finishes — which may be way past the 10ms deadline. The monitor thread solves this, but only if philosopher sleeps are polling-based so they can exit early.
+- **The death message must still print even after `someone_died` is set.** The philosopher that triggers death sets the flag, but its own print must go through. A common bug: checking `is_dead()` before printing causes the dying philosopher's own death message to be suppressed.
+- **Only one death message allowed.** If two philosophers die nearly simultaneously, only the first one should print. Protect the death check-and-print with a mutex so the second one sees `someone_died == 1` and stays silent.
+- **Philosophers must stop their routine after death is detected**, not just the monitor. If `someone_died` is set but philosopher threads keep looping, they may try to lock/unlock mutexes during cleanup → undefined behavior.
+
+### Fork Pickup & Deadlocks
+
+- **Symmetric pickup order causes deadlock.** If every philosopher always grabs left fork first, right fork second → circular wait. Even/odd asymmetric ordering or always locking the lower-indexed fork first breaks the cycle.
+- **Holding one fork while waiting for the other can starve neighbors.** A philosopher holding its left fork and blocking on the right fork prevents its left neighbor from eating. Minimize the window between first and second fork acquisition.
+- **Single philosopher edge case.** With 1 philosopher and 1 fork, the philosopher can never eat. Must die after `time_to_die` ms. Handle this as a special case before threading — don't create threads at all.
+- **2 philosophers, 2 forks.** Both compete for the same pair. Without stagger start or asymmetric ordering, one will starve. Test this case explicitly.
+
+### Race Conditions (Non-Obvious)
+
+- **`meals_eaten++` and `last_meal_time = get_time_ms()` are NOT atomic.** The monitor reads these while the philosopher writes them. Without a per-philosopher mutex, the monitor can read a half-written value (torn read).
+- **The `someone_died` flag needs a mutex too.** It's written by the monitor and read by every philosopher on every loop iteration. An unprotected `int` read/write is technically a data race even on single-core systems (C standard says it's undefined behavior).
+- **`printf` is not atomic.** Two threads calling `printf` at the same time can produce interleaved characters. The output "100 2 is ea100 3 is sleepingting\n" is a real possibility. Protect with a print mutex.
+- **Don't check `someone_died` then act — check and act atomically.** The TOCTOU (time-of-check-to-time-of-use) gap between checking `is_dead()` and locking a fork means a death might have occurred in between.
+
+### Cleanup & Resource Leaks
+
+- **Every `pthread_mutex_init` must have a matching `pthread_mutex_destroy`.** Forgetting to destroy even one mutex is a leak. Track them systematically (e.g., destroy in reverse order of creation).
+- **`pthread_join` all threads before destroying mutexes.** If you destroy a mutex while a thread is still running and trying to lock it, you get undefined behavior. Join everything first, then destroy.
+- **Named semaphores persist after process exit (bonus).** They live in `/dev/shm/` on Linux. If your program crashes without calling `sem_unlink`, stale semaphores remain and cause "semaphore already exists" errors on next run. Always clean up at start too: call `sem_unlink` before `sem_open`.
+- **Child processes must be reaped (bonus).** Every `fork()` needs a matching `waitpid()`. Unreaped children become zombies. If the parent exits first, children become orphans adopted by init — still running and holding semaphore references.
+
+### Evaluation-Specific
+
+- **Evaluators will test `./philo 1 800 200 200`** — must die, must print one "taken fork" then death. No threads needed for this case.
+- **Evaluators will test impossible timing** — `./philo 4 310 200 100` (time_to_die < time_to_eat + time_to_sleep). Someone must die.
+- **Evaluators will test `./philo 5 800 200 200 5`** and verify all 5 philosophers eat exactly 5 times before the simulation stops cleanly.
+- **Evaluators will run with 200 philosophers** — must not deadlock, must not crash. Stress tests reveal race conditions that don't appear with 5 philosophers.
+- **Evaluators may request live modifications during evaluation** — you must understand every line of your code. Be prepared to change the death check interval or fork pickup order on the spot.
+- **42 Norm compliance is checked.** Functions >25 lines, variable declarations at top of scope, no `for` loops — all the usual rules. Norm errors on a working project can still cause a failing grade.
