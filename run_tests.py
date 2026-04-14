@@ -2,41 +2,106 @@
 """
 Rich TUI test runner for 42_philosophers project.
 
-Compiles project sources once into a static archive, then links each
-test against it — reducing compilation from N×S to S+N.
+Uses make for incremental builds — only recompiles changed files.
 Tests run in parallel with a live animated display.
 
 Usage:
-    python3 run_tests.py                          # run all, auto ccache, max 5 parallel
-    python3 run_tests.py table_create             # run specific suite
-    python3 run_tests.py --disable-ccache         # no ccache
-    python3 run_tests.py --max-parallel 10         # 10 parallel tests
-    python3 run_tests.py --max-parallel 1          # sequential
+    python3 run_tests.py              # incremental build + run all tests
+    python3 run_tests.py --clean      # full rebuild from scratch
+    python3 run_tests.py table_create  # run specific suite
+    python3 run_tests.py --max-parallel 5    # parallel test execution (default: 1)
+    python3 run_tests.py --disable-ccache    # skip ccache
 """
 
+import fcntl
 import glob
 import os
-import re
 import shutil
 import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-try:
-    from rich.console import Console, Group
-    from rich.live import Live
-    from rich.text import Text
-except ImportError:
-    subprocess.check_call(
-        [sys.executable, "-m", "pip", "install", "rich"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    print("Installed [rich] package.")
-    from rich.console import Console, Group
-    from rich.text import Text
+
+def _prompt_install_rich():
+    """Interactive prompt to install rich. Returns True if installed."""
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    RESET = "\033[0m"
+
+    print()
+    print(f"  {BOLD}rich{RESET} is required for the test runner but is not installed.")
+    print()
+    print(f"  How would you like to install it?")
+    print(f"    {BOLD}1){RESET} pip install rich")
+    print(f"    {DIM}2){RESET} pip3 install rich")
+    print(f"    {DIM}3){RESET} uv pip install rich")
+    print(f"    {RED}4){RESET} Abort")
+    print()
+
+    choice = input(f"  Enter choice [{BOLD}1{RESET}] (default: pip): ").strip()
+
+    commands = {
+        "1": [sys.executable, "-m", "pip", "install", "rich"],
+        "2": ["pip3", "install", "rich"],
+        "3": ["uv", "pip", "install", "rich"],
+        "4": None,
+    }
+
+    if choice == "" or choice == "1":
+        cmd = commands["1"]
+    elif choice in commands:
+        cmd = commands[choice]
+    else:
+        print(f"  {RED}Invalid choice: {choice}{RESET}")
+        return False
+
+    if cmd is None:
+        print(f"  Aborted.")
+        return False
+
+    print()
+    try:
+        subprocess.check_call(cmd)
+        print(f"\n  {GREEN}✓ rich installed successfully{RESET}")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"\n  {RED}✗ Installation failed: {e}{RESET}")
+        return False
+
+
+def _try_import_rich():
+    """Try to import rich. Returns the modules or None."""
+    try:
+        from rich.console import Console, Group
+        from rich.live import Live
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.tree import Tree
+
+        return Console, Group, Live, Panel, Text, Tree
+    except ImportError:
+        return None
+
+
+_rich = _try_import_rich()
+if _rich is None:
+    if not _prompt_install_rich():
+        print()
+        print("  Cannot run tests without rich. Please install it manually:")
+        print("    pip install rich")
+        sys.exit(1)
+    _rich = _try_import_rich()
+    if _rich is None:
+        print()
+        print("  Installation succeeded but rich still cannot be imported.")
+        print("  Try restarting the test runner.")
+        sys.exit(1)
+
+Console, Group, Live, Panel, Text, Tree = _rich
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -44,8 +109,6 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 TESTS_DIR = os.path.join(PROJECT_ROOT, "tests")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "test_build")
-
-TERM_WIDTH = 80
 
 
 def get_project_sources():
@@ -70,35 +133,92 @@ def discover_tests(suite):
     return sorted(glob.glob(os.path.join(suite_dir, "*.c")))
 
 
-def build_project_lib(project_sources, build_dir, use_ccache):
-    cc = ["ccache", "cc"] if use_ccache else ["cc"]
-    obj_dir = os.path.join(build_dir, "obj")
-    os.makedirs(obj_dir, exist_ok=True)
+def _generate_makefile(build_dir, src_dir, project_sources, compile_jobs, use_ccache):
+    """Generate a Makefile in build_dir. Returns path to Makefile."""
+    rel_src = os.path.relpath(src_dir, build_dir)
 
-    obj_files = []
+    objs = []
     for src in project_sources:
-        rel = os.path.relpath(src, SRC_DIR)
-        obj = os.path.join(obj_dir, os.path.splitext(rel)[0] + ".o")
-        os.makedirs(os.path.dirname(obj), exist_ok=True)
-        cmd = cc + ["-O0", "-I" + SRC_DIR, "-c", src, "-o", obj]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            return None, result.stderr
-        obj_files.append(obj)
+        rel = os.path.relpath(src, src_dir)
+        obj = "obj/" + os.path.splitext(rel)[0] + ".o"
+        objs.append(obj)
 
-    lib_path = os.path.join(build_dir, "libproject.a")
-    cmd = ["ar", "rcs", lib_path] + obj_files
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return None, result.stderr
-    return lib_path, None
+    cc_var = "CC = ccache cc" if use_ccache else "CC ?= cc"
+    test_names = []
+    test_targets = []
+    for suite, test_name, test_file, binary in compile_jobs:
+        target = os.path.basename(binary)
+        test_names.append(target)
+        test_targets.append((target, test_file))
+
+    lines = []
+    lines.append(f"{cc_var}")
+    lines.append(f"CFLAGS = -O0 -fdiagnostics-color=always -MMD -MP -I{rel_src}")
+    lines.append(f"SRC_DIR = {rel_src}")
+    lines.append("")
+    lines.append(f"OBJS = {' '.join(objs)}")
+    lines.append("LIB = libproject.a")
+    lines.append("")
+    lines.append(f"TESTS = {' '.join(test_names)}")
+    lines.append("")
+    lines.append(".PHONY: all clean")
+    lines.append("")
+    lines.append("all: $(LIB) $(TESTS)")
+    lines.append("")
+    lines.append("$(LIB): $(OBJS)")
+    lines.append("\tar rcs $@ $^")
+    lines.append("")
+    lines.append("obj/%.o: $(SRC_DIR)/%.c")
+    lines.append("\t@mkdir -p $(dir $@)")
+    lines.append("\t$(CC) $(CFLAGS) -c $< -o $@")
+    lines.append("")
+
+    for target, test_file in test_targets:
+        rel_test = os.path.relpath(test_file, build_dir)
+        lines.append(f"{target}: {rel_test} $(LIB)")
+        lines.append(f"\t$(CC) $(CFLAGS) $< $(LIB) -o $@")
+        lines.append("")
+
+    lines.append("clean:")
+    lines.append("\trm -rf obj $(LIB) $(TESTS)")
+    lines.append("")
+    lines.append("-include $(OBJS:.o=.d)")
+
+    makefile_path = os.path.join(build_dir, "Makefile")
+    with open(makefile_path, "w") as f:
+        f.write("\n".join(lines))
+    return makefile_path
 
 
-def compile_test(test_file, lib_path, output_binary, use_ccache):
-    cc = ["ccache", "cc"] if use_ccache else ["cc"]
-    cmd = cc + ["-O0", "-I" + SRC_DIR, test_file, lib_path, "-o", output_binary]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.returncode == 0, result.stderr
+def _makefile_needs_regen(build_dir, compile_jobs):
+    """Check if Makefile needs regeneration by comparing manifest."""
+    manifest_path = os.path.join(build_dir, ".manifest")
+    current = "\n".join(
+        f"{suite}:{test_file}:{os.path.basename(binary)}"
+        for suite, test_name, test_file, binary in compile_jobs
+    )
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            if f.read() == current:
+                return False
+    with open(manifest_path, "w") as f:
+        f.write(current)
+    return True
+
+
+def _acquire_lock(build_dir):
+    """Acquire exclusive file lock. Returns lock fd or exits."""
+    os.makedirs(build_dir, exist_ok=True)
+    lock_path = os.path.join(build_dir, ".lock")
+    lock_fd = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
+        return lock_fd
+    except (IOError, OSError):
+        print("Another test run is in progress. Skipping.")
+        sys.exit(0)
 
 
 def run_single_test(binary_path):
@@ -118,204 +238,148 @@ def run_single_test(binary_path):
         return 139, "", duration_ms, True, False
 
 
-_ERROR_KEYWORDS = {
-    "expected",
-    "got",
-    "wrong",
-    "NULL",
-    "returned",
-    "error",
-    "fail",
-    "failed",
-    "timeout",
-    "segfault",
-}
-
-_TOKEN_RE = re.compile(r"""("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\d+|[a-zA-Z_]\w*)""")
-
-_KEYWORDS_UPPER = {k.upper() for k in _ERROR_KEYWORDS}
-
-
-def highlight_error(msg: str) -> Text:
-    text = Text()
-    last_end = 0
-    for m in _TOKEN_RE.finditer(msg):
-        if m.start() > last_end:
-            text.append(msg[last_end : m.start()], style="dim white")
-        token = m.group()
-        if (token.startswith('"') and token.endswith('"')) or (
-            token.startswith("'") and token.endswith("'")
-        ):
-            text.append(token, style="green")
-        elif token.isdigit():
-            text.append(token, style="cyan")
-        elif token in _ERROR_KEYWORDS or token.upper() in _KEYWORDS_UPPER:
-            text.append(token, style="bold yellow")
-        else:
-            text.append(token, style="dim white")
-        last_end = m.end()
-    if last_end < len(msg):
-        text.append(msg[last_end:], style="dim white")
-    return text
-
-
 @dataclass
 class TestResult:
     status: str = "pending"
     duration_ms: float = 0.0
-    error_lines: list = field(default_factory=list)
+    output: str = ""
 
 
-def _header_line(label, is_running, spinner_idx, ms):
-    spinner = SPINNER_FRAMES[spinner_idx % len(SPINNER_FRAMES)]
-    if is_running:
-        inner = f" {label} {spinner} ── [{ms:.0f}ms] "
-    else:
-        inner = f" {label} ── [{ms:.0f}ms] "
-    prefix = "╭─"
-    fill = max(0, TERM_WIDTH - len(prefix) - len(inner))
-    return prefix + inner + "─" * fill
-
-
-def _footer_line():
-    return "╰" + "─" * max(0, TERM_WIDTH - 1)
-
-
-class TestDisplay:
+class TestState:
     def __init__(self):
         self.results = {}
-        self.spinner_idx = 0
-        self.suite_order = []
-        self.suite_test_order = {}
-        self.suite_total_ms = {}
+        self.suites_order = []
+        self.suite_tests = {}
         self.suite_done = set()
+        self.suite_total_ms = {}
         self.suite_start_times = {}
         self.grand_ms = 0.0
         self.grand_start_time = None
         self.all_done = False
+        self.spinner_idx = 0
 
     def advance_spinner(self):
         self.spinner_idx = (self.spinner_idx + 1) % len(SPINNER_FRAMES)
 
-    def _suite_color(self, suite):
-        if suite in self.suite_done:
-            has_fail = any(
-                self.results.get(tn) is not None
-                and self.results[tn].status not in ("pending", "running", "passed")
-                for tn in self.suite_test_order.get(suite, [])
-            )
-            return "red" if has_fail else "green"
-        return "cyan"
+    @property
+    def spinner(self):
+        return SPINNER_FRAMES[self.spinner_idx % len(SPINNER_FRAMES)]
 
-    def render(self):
-        elements = []
-        now = time.perf_counter()
-
-        for suite in self.suite_order:
-            test_names = self.suite_test_order.get(suite, [])
-            is_running = suite not in self.suite_done
-            color = self._suite_color(suite)
-
-            if is_running:
-                start_time = self.suite_start_times.get(suite, now)
-                elapsed_ms = (now - start_time) * 1000
-                header = _header_line(suite, True, self.spinner_idx, elapsed_ms)
-            else:
-                total_ms = self.suite_total_ms.get(suite, 0)
-                header = _header_line(suite, False, self.spinner_idx, total_ms)
-            elements.append(Text(header, style=color))
-            elements.append(Text("│", style=color))
-
-            max_name_len = max((len(tn) for tn in test_names), default=0)
-            total_tests = len(test_names)
-            spinner_char = SPINNER_FRAMES[self.spinner_idx % len(SPINNER_FRAMES)]
-
-            for idx, tn in enumerate(test_names):
-                is_last = idx == total_tests - 1
-                tree = "╰─" if is_last else "├─"
-                res = self.results.get(tn)
-
-                if res is None or res.status in ("pending", "running"):
-                    line = Text()
-                    line.append("│  ", style=color)
-                    line.append(tree + " ", style="yellow")
-                    line.append(spinner_char + " ", style="yellow")
-                    line.append(tn, style="yellow")
-                    line.append("  running...", style="dim yellow")
-                    elements.append(line)
-                elif res.status == "passed":
-                    line = Text()
-                    line.append("│  ", style=color)
-                    line.append(tree + " ", style="green")
-                    line.append("✓ ", style="bold green")
-                    line.append(tn.ljust(max_name_len), style="green")
-                    line.append(f"  [{res.duration_ms:.0f}ms]", style="dim green")
-                    elements.append(line)
-                else:
-                    label = res.status
-                    if label == "compile_fail":
-                        label = "compile fail"
-                    line = Text()
-                    line.append("│  ", style=color)
-                    line.append(tree + " ", style="red")
-                    line.append("✗ ", style="bold red")
-                    line.append(tn.ljust(max_name_len), style="red")
-                    line.append(f"  [{res.duration_ms:.0f}ms]", style="dim red")
-                    elements.append(line)
-                    for err_text in res.error_lines:
-                        err_line = Text()
-                        err_line.append("│       ", style=color)
-                        err_line.append("→ ", style="dim yellow")
-                        err_line.append(highlight_error(err_text))
-                        elements.append(err_line)
-
-            elements.append(Text("│", style=color))
-            elements.append(Text(_footer_line(), style=color))
-
-        total_passed = sum(1 for r in self.results.values() if r.status == "passed")
-        total_count = len(self.results)
-        total_failed = sum(
-            1
-            for r in self.results.values()
-            if r.status not in ("pending", "running", "passed")
+    def _suite_guide_style(self, suite):
+        if suite not in self.suite_done:
+            return "cyan"
+        has_fail = any(
+            self.results.get(tn) is not None
+            and self.results[tn].status not in ("pending", "running", "passed")
+            for tn in self.suite_tests.get(suite, [])
         )
+        return "red" if has_fail else "green"
 
-        if self.grand_start_time is not None and not self.all_done:
-            results_ms = (now - self.grand_start_time) * 1000
+
+def _build_error_panel(result):
+    if result.status == "compile_fail":
+        content = Text.from_ansi(result.output) if result.output else Text("")
+        return Panel(
+            content,
+            title="Compilation Error",
+            border_style="red",
+            title_align="left",
+        )
+    if result.status == "segfault":
+        msg = result.output.strip() if result.output.strip() else ""
+        lines = []
+        if msg:
+            lines.append(msg)
+        lines.append("Process terminated with signal 11 (segmentation fault)")
+        return Panel(
+            "\n".join(lines),
+            title="Segfault",
+            border_style="red",
+            title_align="left",
+        )
+    if result.status == "timeout":
+        return Panel(
+            "Test exceeded 10 second limit",
+            title="Timeout",
+            border_style="yellow",
+            title_align="left",
+        )
+    content = result.output.strip() if result.output.strip() else "(no output)"
+    return Panel(
+        content,
+        title="Runtime Error",
+        border_style="red",
+        title_align="left",
+    )
+
+
+def build_renderable(state):
+    elements = []
+    now = time.perf_counter()
+
+    for suite in state.suites_order:
+        test_names = state.suite_tests.get(suite, [])
+        is_done = suite in state.suite_done
+        guide_style = state._suite_guide_style(suite)
+
+        if is_done:
+            total_ms = state.suite_total_ms.get(suite, 0)
+            label = f"{suite} ── [{total_ms:.0f}ms]"
         else:
-            results_ms = self.grand_ms
+            start_time = state.suite_start_times.get(suite, now)
+            elapsed_ms = (now - start_time) * 1000
+            label = f"{suite} {state.spinner} ── [{elapsed_ms:.0f}ms]"
 
-        results_inner = f" Results ── [{results_ms:.0f}ms] "
-        prefix = "╭─"
-        fill = max(0, TERM_WIDTH - len(prefix) - len(results_inner))
-        results_header = prefix + results_inner + "─" * fill
-        elements.append(Text(results_header, style="bold white"))
-        elements.append(Text("│", style="bold white"))
+        tree = Tree(label, guide_style=guide_style)
 
-        if total_count > 0:
-            passed_line = Text()
-            passed_line.append("│  ", style="bold white")
-            passed_line.append(
-                f"{total_passed}/{total_count} passed", style="bold green"
-            )
-            elements.append(passed_line)
-            if total_failed > 0:
-                fail_line = Text()
-                fail_line.append("│  ", style="bold white")
-                fail_line.append("✗ ", style="bold red")
-                fail_line.append(f"{total_failed} failed", style="bold red")
-                elements.append(fail_line)
+        max_name_len = max((len(tn) for tn in test_names), default=0)
 
-        elements.append(Text("│", style="bold white"))
-        elements.append(Text(_footer_line(), style="bold white"))
+        for tn in test_names:
+            res = state.results.get(tn)
+            if res is None or res.status in ("pending", "running"):
+                padded = tn.ljust(max_name_len)
+                tree.add(Text(f"{state.spinner} {padded}  running...", style="yellow"))
+            elif res.status == "passed":
+                padded = tn.ljust(max_name_len)
+                tree.add(Text(f"✓ {padded}  [{res.duration_ms:.0f}ms]", style="green"))
+            else:
+                padded = tn.ljust(max_name_len)
+                fail_node = tree.add(
+                    Text(f"✗ {padded}  [{res.duration_ms:.0f}ms]", style="bold red")
+                )
+                fail_node.add(_build_error_panel(res))
 
-        return Group(*elements)
+        elements.append(tree)
+
+    total_count = len(state.results)
+    total_passed = sum(1 for r in state.results.values() if r.status == "passed")
+    total_failed = sum(
+        1
+        for r in state.results.values()
+        if r.status not in ("pending", "running", "passed")
+    )
+
+    if state.grand_start_time is not None and not state.all_done:
+        results_ms = (now - state.grand_start_time) * 1000
+    else:
+        results_ms = state.grand_ms
+
+    results_tree = Tree(f"Results ── [{results_ms:.0f}ms]", guide_style="dim")
+    if total_count > 0:
+        results_tree.add(Text(f"{total_passed}/{total_count} passed", style="green"))
+        if total_failed > 0:
+            results_tree.add(Text(f"✗ {total_failed} failed", style="bold red"))
+
+    elements.append(results_tree)
+    return Group(*elements)
 
 
 def main():
-    global TERM_WIDTH
+    do_clean = "--clean" in sys.argv
+    if do_clean:
+        sys.argv.remove("--clean")
 
-    max_parallel = 5
+    max_parallel = 1
     if "--max-parallel" in sys.argv:
         idx = sys.argv.index("--max-parallel")
         if idx + 1 < len(sys.argv):
@@ -349,134 +413,134 @@ def main():
         sys.exit(1)
 
     project_sources = get_project_sources()
-    os.makedirs(BUILD_DIR, exist_ok=True)
-
-    console = Console()
-    display = TestDisplay()
-
-    try:
-        TERM_WIDTH = os.get_terminal_size().columns
-    except OSError:
-        TERM_WIDTH = 80
-    TERM_WIDTH = min(TERM_WIDTH, 100)
-
-    lib_path, lib_error = build_project_lib(project_sources, BUILD_DIR, use_ccache)
-    if lib_path is None:
-        console.print("[red]Failed to build project library:[/red]")
-        if lib_error and lib_error.strip():
-            for line in lib_error.strip().split("\n"):
-                console.print(f"  [yellow]→ {line}[/yellow]")
-        shutil.rmtree(BUILD_DIR, ignore_errors=True)
-        sys.exit(1)
 
     compile_jobs = []
+    state = TestState()
     for suite in suites:
         tests = discover_tests(suite)
         for test_file in tests:
             test_name = os.path.splitext(os.path.basename(test_file))[0]
             binary = os.path.join(BUILD_DIR, f"{suite}_{test_name}")
             compile_jobs.append((suite, test_name, test_file, binary))
-            display.results[test_name] = TestResult(status="pending")
-            display.suite_test_order.setdefault(suite, []).append(test_name)
-    display.suite_order = suites
+            state.results[test_name] = TestResult(status="pending")
+            state.suite_tests.setdefault(suite, []).append(test_name)
+    state.suites_order = suites
 
-    cpu_count = os.cpu_count() or 4
-    compile_results = {}
-    with ProcessPoolExecutor(max_workers=cpu_count) as executor:
-        futures = {}
-        for suite, test_name, test_file, binary in compile_jobs:
-            future = executor.submit(
-                compile_test, test_file, lib_path, binary, use_ccache
+    lock_fd = _acquire_lock(BUILD_DIR)
+
+    try:
+        if do_clean:
+            subprocess.run(["make", "-C", BUILD_DIR, "clean"], capture_output=True)
+
+        if _makefile_needs_regen(BUILD_DIR, compile_jobs):
+            _generate_makefile(
+                BUILD_DIR, SRC_DIR, project_sources, compile_jobs, use_ccache
             )
-            futures[future] = (suite, test_name, binary)
-        for future in futures:
-            suite, test_name, binary = futures[future]
-            ok, stderr = future.result()
-            compile_results[(suite, test_name)] = (ok, stderr, binary)
 
-    any_failed = False
-    grand_start = time.perf_counter()
-    display.grand_start_time = grand_start
+        cpu_count = os.cpu_count() or 4
+        make_result = subprocess.run(
+            ["make", "-C", BUILD_DIR, f"-j{cpu_count}"],
+            capture_output=True,
+            text=True,
+        )
 
-    with Live(console=console, refresh_per_second=10, transient=True) as live:
-        live.update(display.render())
+        if make_result.returncode != 0:
+            for suite, test_name, test_file, binary in compile_jobs:
+                if not os.path.exists(binary):
+                    test_basename = os.path.basename(test_file)
+                    relevant = []
+                    for line in make_result.stderr.splitlines():
+                        if test_basename in line or test_file in line:
+                            relevant.append(line)
+                    if not relevant:
+                        relevant = make_result.stderr.splitlines()
+                    error_output = "\n".join(relevant)
+                    res = TestResult(status="compile_fail", duration_ms=0)
+                    res.output = (
+                        error_output.strip()
+                        if error_output.strip()
+                        else make_result.stderr.strip()
+                    )
+                    if test_name in state.results:
+                        state.results[test_name] = res
 
-        for suite in suites:
-            tests = discover_tests(suite)
-            if not tests:
-                display.suite_total_ms[suite] = 0
-                display.suite_done.add(suite)
-                live.update(display.render())
-                continue
+        console = Console()
 
-            test_items = []
-            for test_file in tests:
-                test_name = os.path.splitext(os.path.basename(test_file))[0]
-                ok, stderr, binary = compile_results.get(
-                    (suite, test_name), (False, "not compiled", "")
-                )
-                test_items.append((test_name, ok, stderr, binary))
+        any_failed = any(r.status == "compile_fail" for r in state.results.values())
+        grand_start = time.perf_counter()
+        state.grand_start_time = grand_start
 
-            suite_start = time.perf_counter()
-            display.suite_start_times[suite] = suite_start
+        with Live(console=console, refresh_per_second=10, transient=True) as live:
+            live.update(build_renderable(state))
 
-            run_futures = {}
-            with ProcessPoolExecutor(max_workers=max_parallel) as executor:
-                for test_name, ok, stderr, binary in test_items:
-                    if not ok:
-                        res = TestResult(status="compile_fail", duration_ms=0)
-                        res.error_lines = (
-                            stderr.strip().split("\n") if stderr.strip() else []
-                        )
-                        display.results[test_name] = res
-                        any_failed = True
-                        live.update(display.render())
-                        continue
+            for suite in suites:
+                test_names = state.suite_tests.get(suite, [])
+                if not test_names:
+                    state.suite_total_ms[suite] = 0
+                    state.suite_done.add(suite)
+                    live.update(build_renderable(state))
+                    continue
 
-                    display.results[test_name].status = "running"
-                    display.advance_spinner()
-                    live.update(display.render())
-                    future = executor.submit(run_single_test, binary)
-                    run_futures[future] = test_name
+                suite_start = time.perf_counter()
+                state.suite_start_times[suite] = suite_start
 
-                for future in as_completed(run_futures):
-                    test_name = run_futures[future]
-                    rc, output, duration_ms, segfault, timeout = future.result()
+                run_futures = {}
+                with ProcessPoolExecutor(max_workers=max_parallel) as executor:
+                    for tn in test_names:
+                        binary = None
+                        for s, t_name, t_file, b in compile_jobs:
+                            if t_name == tn and s == suite:
+                                binary = b
+                                break
+                        if binary is None:
+                            continue
+                        if state.results[tn].status == "compile_fail":
+                            any_failed = True
+                            continue
+                        state.results[tn].status = "running"
+                        state.advance_spinner()
+                        live.update(build_renderable(state))
+                        future = executor.submit(run_single_test, binary)
+                        run_futures[future] = tn
 
-                    if timeout:
-                        res = TestResult(status="timeout", duration_ms=duration_ms)
-                        res.error_lines = ["test timed out (10s limit)"]
-                    elif segfault or rc == 139:
-                        res = TestResult(status="segfault", duration_ms=duration_ms)
-                        res.error_lines = (
-                            output.strip().split("\n") if output.strip() else []
-                        )
-                    elif rc != 0:
-                        res = TestResult(status="failed", duration_ms=duration_ms)
-                        res.error_lines = (
-                            output.strip().split("\n") if output.strip() else []
-                        )
-                    else:
-                        res = TestResult(status="passed", duration_ms=duration_ms)
+                    for future in as_completed(run_futures):
+                        test_name = run_futures[future]
+                        rc, output, duration_ms, segfault, timeout = future.result()
 
-                    display.results[test_name] = res
-                    display.advance_spinner()
-                    if res.status != "passed":
-                        any_failed = True
-                    live.update(display.render())
+                        if timeout:
+                            res = TestResult(status="timeout", duration_ms=duration_ms)
+                        elif segfault or rc == 139:
+                            res = TestResult(status="segfault", duration_ms=duration_ms)
+                            res.output = output.strip() if output.strip() else ""
+                        elif rc != 0:
+                            res = TestResult(status="failed", duration_ms=duration_ms)
+                            res.output = output.strip() if output.strip() else ""
+                        else:
+                            res = TestResult(status="passed", duration_ms=duration_ms)
 
-            suite_end = time.perf_counter()
-            display.suite_total_ms[suite] = (suite_end - suite_start) * 1000
-            display.suite_done.add(suite)
-            live.update(display.render())
+                        state.results[test_name] = res
+                        state.advance_spinner()
+                        if res.status != "passed":
+                            any_failed = True
+                        live.update(build_renderable(state))
 
-    grand_end = time.perf_counter()
-    display.grand_ms = (grand_end - grand_start) * 1000
-    display.all_done = True
+                suite_end = time.perf_counter()
+                state.suite_total_ms[suite] = (suite_end - suite_start) * 1000
+                state.suite_done.add(suite)
+                live.update(build_renderable(state))
 
-    console.print(display.render())
-    shutil.rmtree(BUILD_DIR, ignore_errors=True)
-    sys.exit(1 if any_failed else 0)
+        grand_end = time.perf_counter()
+        state.grand_ms = (grand_end - grand_start) * 1000
+        state.all_done = True
+
+        console.print(build_renderable(state))
+        sys.exit(1 if any_failed else 0)
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -55,38 +55,51 @@ tests/
 
 ## Compilation
 
-Each test is compiled individually:
+Project sources are compiled once into a static archive (`libproject.a`), then each test links against it:
 
 ```
-cc -Isrc/ test_file.c <project_sources> -o <binary>
+# Once (shared):
+cc -O0 -Isrc/ -c src/utils.c -o obj/utils.o
+cc -O0 -Isrc/ -c src/table/table.c -o obj/table/table.o
+ar rcs libproject.a obj/utils.o obj/table/table.o
+
+# Per test:
+cc -O0 -Isrc/ test_file.c libproject.a -o binary
 ```
 
 - All `.c` files under `src/` are included **except** `src/main.c` (avoiding duplicate `main`).
 - Include path is `src/`, so use `#include "lib.h"` etc.
+- `ccache` is auto-detected and used if available.
 - If a test fails to compile, the runner reports `COMPILE FAIL` with compiler output.
 
 ## Running Tests
 
 ```sh
-python3 run_tests.py                        # run all suites
+python3 run_tests.py                        # run all suites (auto-detects ccache)
 python3 run_tests.py suite_name             # run one suite
 python3 run_tests.py suite_a suite_b        # run multiple suites
+python3 run_tests.py --disable-ccache       # force disable ccache
+python3 run_tests.py --max-parallel 1       # sequential execution
+python3 run_tests.py --max-parallel 10      # up to 10 tests in parallel
 ```
 
-- Compilation runs in parallel across CPU cores.
-- Test execution is sequential (avoids interleaved output).
+- Project sources compile once into a static library.
+- Test compilation runs in parallel across CPU cores.
+- Test execution runs in parallel (default: 5 concurrent, configurable via `--max-parallel`).
 - Each test has a 10-second timeout.
 - Runner exit code: `0` if all pass, `1` if any fail.
+- Requires the `rich` Python package (auto-installed if missing).
 
 ## Output
 
 | Symbol | Meaning | Color |
 |--------|---------|-------|
-| `✓ test_name   PASS` | Test returned 0 | Green |
-| `✗ test_name   FAIL` | Test returned non-zero; stdout shown with `→` prefix | Red |
-| `✗ test_name   COMPILE FAIL` | Compilation failed; compiler errors shown | Red |
-| `✗ test_name   SEGFAULT` | Crashed (signal 11 / exit 139) | Red |
-| `✗ test_name   TIMEOUT` | Exceeded 10s limit | Yellow |
+| `⠋ test_name` | Test running (animated spinner) | Yellow |
+| `✓ test_name  [Nms]` | Test passed | Green |
+| `✗ test_name  [Nms]` | Test failed; stdout shown with `→` prefix | Red |
+| `✗ test_name  COMPILE FAIL` | Compilation failed; compiler errors shown | Red |
+| `✗ test_name  SEGFAULT` | Crashed (signal 11 / exit 139) | Red |
+| `✗ test_name  TIMEOUT` | Exceeded 10s limit | Yellow |
 
 ## Adding a New Suite
 
