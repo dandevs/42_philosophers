@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _prompt_install_rich():
@@ -346,7 +346,9 @@ def _load_db(build_dir):
                 entry["compile_error"] = None
                 entry["duration_ms"] = 0
                 entry["binary_mtime"] = (
-                    os.path.getmtime(binary_path) if os.path.exists(binary_path) else None
+                    os.path.getmtime(binary_path)
+                    if os.path.exists(binary_path)
+                    else None
                 )
                 if os.path.exists(binary_path):
                     entry["status"] = "passed"
@@ -504,17 +506,6 @@ def _build_compile_jobs(suites):
             test_id = os.path.basename(binary)
             binaries_by_id[test_id] = binary
     return compile_jobs, binaries_by_id
-
-
-def _build_state(suites, compile_jobs):
-    state = TestState()
-    state.suites_order = suites
-    for suite, test_name, test_file, binary in compile_jobs:
-        test_id = os.path.basename(binary)
-        state.results[test_id] = TestResult(status="pending")
-        state.test_labels[test_id] = test_name
-        state.suite_tests.setdefault(suite, []).append(test_id)
-    return state
 
 
 def _normalize_to_project_rel(path):
@@ -787,16 +778,6 @@ def _terminate_process(proc):
             pass
 
 
-def _monitor_test_completion(test_id, run_token, proc, start_time, done_queue):
-    try:
-        out, err = proc.communicate()
-    except Exception as exc:
-        out, err = "", str(exc)
-    duration_ms = (time.perf_counter() - start_time) * 1000
-    output = (out or "") + (err or "")
-    done_queue.put((test_id, run_token, proc.returncode, output, duration_ms))
-
-
 def _try_start_watchdog(buffer):
     try:
         from watchdog.events import FileSystemEventHandler
@@ -921,46 +902,71 @@ def _parse_make_errors(make_output, compile_jobs, build_dir):
     return errors, "\n".join(unassigned).strip()
 
 
-def run_single_test(binary_path):
-    start = time.perf_counter()
-    try:
-        result = subprocess.run(
-            [binary_path], capture_output=True, text=True, timeout=10
-        )
-        duration_ms = (time.perf_counter() - start) * 1000
-        output = (result.stdout or "") + (result.stderr or "")
-        return result.returncode, output, duration_ms, False, False
-    except subprocess.TimeoutExpired:
-        duration_ms = (time.perf_counter() - start) * 1000
-        return -1, "", duration_ms, False, True
-    except (FileNotFoundError, PermissionError, OSError) as e:
-        duration_ms = (time.perf_counter() - start) * 1000
-        return 1, str(e), duration_ms, False, False
-    except Exception as e:
-        duration_ms = (time.perf_counter() - start) * 1000
-        return 1, str(e), duration_ms, False, False
+TERMINAL_STATUSES = frozenset(
+    (
+        "passed",
+        "failed",
+        "segfault",
+        "timeout",
+        "compile_fail",
+        "compile_fail_cached",
+    )
+)
+
+RUNNABLE_STATUSES = frozenset(("pending_ready", "running"))
 
 
-@dataclass
-class TestResult:
-    status: str = "pending"
-    duration_ms: float = 0.0
-    output: str = ""
+class TestItem:
+    __slots__ = (
+        "test_id",
+        "suite",
+        "test_name",
+        "test_file",
+        "binary",
+        "status",
+        "time_status_changed",
+        "run_token",
+        "duration_ms",
+        "output",
+        "proc",
+        "start_time",
+    )
+
+    def __init__(
+        self, test_id, suite, test_name, test_file, binary, status, time_status_changed
+    ):
+        self.test_id = test_id
+        self.suite = suite
+        self.test_name = test_name
+        self.test_file = test_file
+        self.binary = binary
+        self.status = status
+        self.time_status_changed = time_status_changed
+        self.run_token = 0
+        self.duration_ms = 0.0
+        self.output = ""
+        self.proc = None
+        self.start_time = 0.0
 
 
-class TestState:
-    def __init__(self):
-        self.results = {}
-        self.test_labels = {}
+class SchedulerState:
+    def __init__(self, max_parallel, timeout_ms, binaries_by_id):
+        self.tests = {}
         self.suites_order = []
         self.suite_tests = {}
-        self.suite_done = set()
-        self.suite_total_ms = {}
-        self.suite_start_times = {}
-        self.grand_ms = 0.0
+        self.available_runners = max_parallel
+        self.max_parallel = max_parallel
+        self.timeout_ms = timeout_ms
         self.grand_start_time = None
+        self.grand_ms = 0.0
         self.all_done = False
+        self.any_failed = False
+        self._dirty = False
         self.spinner_idx = 0
+        self._tick_event = threading.Event()
+        self._run_token_counter = 0
+        self._completion_queue = queue.Queue()
+        self._binaries_by_id = binaries_by_id
 
     def advance_spinner(self):
         self.spinner_idx = (self.spinner_idx + 1) % len(SPINNER_FRAMES)
@@ -969,22 +975,189 @@ class TestState:
     def spinner(self):
         return SPINNER_FRAMES[self.spinner_idx % len(SPINNER_FRAMES)]
 
-    def _suite_guide_style(self, suite):
-        if suite not in self.suite_done:
+    def state_changed(self):
+        self._drain_completions()
+        self._dispatch_pending()
+        self._check_all_done()
+        self._dirty = True
+        self._tick_event.set()
+
+    def _drain_completions(self):
+        while True:
+            try:
+                item = self._completion_queue.get_nowait()
+            except queue.Empty:
+                break
+            test_id, run_token, returncode, output, duration_ms = item
+            test = self.tests.get(test_id)
+            if test is None or test.run_token != run_token:
+                continue
+            test.proc = None
+            test.duration_ms = duration_ms
+            test.output = output
+            test.time_status_changed = time.perf_counter()
+            if returncode == 139:
+                test.status = "segfault"
+            elif returncode != 0:
+                test.status = "failed"
+            else:
+                test.status = "passed"
+            if test.status != "passed":
+                self.any_failed = True
+            self.available_runners += 1
+
+    def _dispatch_pending(self):
+        pending = sorted(
+            (t for t in self.tests.values() if t.status == "pending_ready"),
+            key=lambda t: t.time_status_changed,
+        )
+        for test in pending:
+            if self.available_runners <= 0:
+                break
+            self.available_runners -= 1
+            self._start_test(test)
+
+    def _start_test(self, test):
+        self._run_token_counter += 1
+        test.run_token = self._run_token_counter
+        test.status = "running"
+        run_start = time.perf_counter()
+        test.start_time = run_start
+        test.time_status_changed = run_start
+        try:
+            proc = subprocess.Popen(
+                [test.binary],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as e:
+            test.status = "failed"
+            test.output = str(e)
+            self.available_runners += 1
+            self.any_failed = True
+            return
+        test.proc = proc
+        threading.Thread(
+            target=self._monitor_test,
+            args=(test.test_id, test.run_token, proc, run_start),
+            daemon=True,
+        ).start()
+
+    def _monitor_test(self, test_id, run_token, proc, start_time):
+        try:
+            out, err = proc.communicate()
+        except Exception as e:
+            out, err = "", str(e)
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        output = (out or "") + (err or "")
+        self._completion_queue.put(
+            (test_id, run_token, proc.returncode, output, duration_ms)
+        )
+        self._tick_event.set()
+
+    def check_timeouts(self):
+        now = time.perf_counter()
+        for test in self.tests.values():
+            if test.status != "running":
+                continue
+            elapsed_ms = (now - test.start_time) * 1000
+            if elapsed_ms > self.timeout_ms:
+                _terminate_process(test.proc)
+                test.proc = None
+                test.run_token += 1
+                test.status = "timeout"
+                test.output = f"Test exceeded {self.timeout_ms}ms limit"
+                test.duration_ms = elapsed_ms
+                test.time_status_changed = now
+                self.available_runners += 1
+                self.any_failed = True
+        self._dirty = True
+        self._tick_event.set()
+
+    def reprioritize(self, impacted_ids):
+        now = time.perf_counter()
+        for i, test_id in enumerate(impacted_ids):
+            test = self.tests.get(test_id)
+            if test is None:
+                continue
+            if test.status in TERMINAL_STATUSES:
+                continue
+            if test.status == "running":
+                _terminate_process(test.proc)
+                test.proc = None
+                self.available_runners += 1
+            test.run_token += 1
+            test.status = "pending_ready"
+            test.time_status_changed = now + 0.001 * (i + 1)
+        self.state_changed()
+
+    def _check_all_done(self):
+        for test in self.tests.values():
+            if test.status in RUNNABLE_STATUSES:
+                return
+        self.all_done = True
+
+    def suite_guide_style(self, suite):
+        test_ids = self.suite_tests.get(suite, [])
+        has_active = any(
+            self.tests.get(tid) is not None
+            and self.tests[tid].status in RUNNABLE_STATUSES
+            for tid in test_ids
+        )
+        if has_active:
             return "cyan"
         has_fail = any(
-            self.results.get(tn) is not None
-            and self.results[tn].status not in ("pending", "running", "passed")
-            for tn in self.suite_tests.get(suite, [])
+            self.tests.get(tid) is not None
+            and self.tests[tid].status not in RUNNABLE_STATUSES
+            and self.tests[tid].status != "passed"
+            for tid in test_ids
         )
         return "red" if has_fail else "green"
 
+    def suite_done(self, suite):
+        test_ids = self.suite_tests.get(suite, [])
+        return all(
+            self.tests.get(tid) is not None
+            and self.tests[tid].status not in RUNNABLE_STATUSES
+            for tid in test_ids
+        )
 
-def _build_error_panel(result):
-    if result.status in ("compile_fail", "compile_fail_cached"):
-        content = Text.from_ansi(result.output) if result.output else Text("")
+    def suite_total_ms(self, suite):
+        test_ids = self.suite_tests.get(suite, [])
+        if not self.suite_done(suite):
+            return None
+        return sum(
+            self.tests[tid].duration_ms
+            for tid in test_ids
+            if self.tests.get(tid) is not None
+        )
+
+    def suite_start_time(self, suite):
+        test_ids = self.suite_tests.get(suite, [])
+        if not test_ids:
+            return None
+        runnable = [
+            self.tests[tid]
+            for tid in test_ids
+            if self.tests.get(tid) is not None
+            and self.tests[tid].status in RUNNABLE_STATUSES
+        ]
+        if not runnable:
+            pending = [
+                self.tests[tid] for tid in test_ids if self.tests.get(tid) is not None
+            ]
+            if not pending:
+                return None
+            return min(t.time_status_changed for t in pending)
+        return min(t.time_status_changed for t in runnable)
+
+
+def _build_error_panel(test):
+    if test.status in ("compile_fail", "compile_fail_cached"):
+        content = Text.from_ansi(test.output) if test.output else Text("")
         title = "Compilation Error"
-        if result.status == "compile_fail_cached":
+        if test.status == "compile_fail_cached":
             title = "Compilation Error (cached)"
         return Panel(
             content,
@@ -992,8 +1165,8 @@ def _build_error_panel(result):
             border_style="red",
             title_align="left",
         )
-    if result.status == "segfault":
-        msg = result.output.strip() if result.output.strip() else ""
+    if test.status == "segfault":
+        msg = test.output.strip() if test.output.strip() else ""
         lines = []
         if msg:
             lines.append(msg)
@@ -1004,14 +1177,16 @@ def _build_error_panel(result):
             border_style="red",
             title_align="left",
         )
-    if result.status == "timeout":
+    if test.status == "timeout":
         return Panel(
-            result.output.strip() if result.output.strip() else "Test exceeded timeout limit",
+            test.output.strip()
+            if test.output.strip()
+            else "Test exceeded timeout limit",
             title="Timeout",
             border_style="yellow",
             title_align="left",
         )
-    content = result.output.strip() if result.output.strip() else "(no output)"
+    content = test.output.strip() if test.output.strip() else "(no output)"
     return Panel(
         content,
         title="Runtime Error",
@@ -1026,53 +1201,58 @@ def build_renderable(state):
 
     for suite in state.suites_order:
         test_ids = state.suite_tests.get(suite, [])
-        is_done = suite in state.suite_done
-        guide_style = state._suite_guide_style(suite)
+        is_done = state.suite_done(suite)
+        guide_style = state.suite_guide_style(suite)
 
         if is_done:
-            total_ms = state.suite_total_ms.get(suite, 0)
+            total_ms = state.suite_total_ms(suite) or 0
             label = f"{suite} ── [{total_ms:.0f}ms]"
         else:
-            start_time = state.suite_start_times.get(suite, now)
-            elapsed_ms = (now - start_time) * 1000
+            s_start = state.suite_start_time(suite) or state.grand_start_time or now
+            elapsed_ms = (now - s_start) * 1000
             label = f"{suite} {state.spinner} ── [{elapsed_ms:.0f}ms]"
 
         tree = Tree(label, guide_style=guide_style)
 
         max_name_len = max(
-            (len(state.test_labels.get(test_id, test_id)) for test_id in test_ids),
+            (
+                len(state.tests.get(tid).test_name)
+                if state.tests.get(tid)
+                else len(tid)
+                for tid in test_ids
+            ),
             default=0,
         )
 
-        for test_id in test_ids:
-            label = state.test_labels.get(test_id, test_id)
-            res = state.results.get(test_id)
-            if res is None or res.status in ("pending", "running"):
-                padded = label.ljust(max_name_len)
+        for tid in test_ids:
+            test = state.tests.get(tid)
+            name = test.test_name if test else tid
+            padded = name.ljust(max_name_len)
+            if test is None or test.status in RUNNABLE_STATUSES:
                 tree.add(Text(f"{state.spinner} {padded}  pending", style="yellow"))
-            elif res.status == "passed":
-                padded = label.ljust(max_name_len)
-                tree.add(Text(f"✓ {padded}  [{res.duration_ms:.0f}ms]", style="green"))
+            elif test.status == "passed":
+                tree.add(Text(f"✓ {padded}  [{test.duration_ms:.0f}ms]", style="green"))
             else:
-                padded = label.ljust(max_name_len)
-                if res.status == "compile_fail_cached":
+                if test.status == "compile_fail_cached":
                     fail_node = tree.add(
                         Text(f"✗ {padded}  [cached]", style="bold red")
                     )
                 else:
                     fail_node = tree.add(
-                        Text(f"✗ {padded}  [{res.duration_ms:.0f}ms]", style="bold red")
+                        Text(
+                            f"✗ {padded}  [{test.duration_ms:.0f}ms]", style="bold red"
+                        )
                     )
-                fail_node.add(_build_error_panel(res))
+                fail_node.add(_build_error_panel(test))
 
         elements.append(tree)
 
-    total_count = len(state.results)
-    total_passed = sum(1 for r in state.results.values() if r.status == "passed")
+    total_count = len(state.tests)
+    total_passed = sum(1 for t in state.tests.values() if t.status == "passed")
     total_failed = sum(
         1
-        for r in state.results.values()
-        if r.status not in ("pending", "running", "passed")
+        for t in state.tests.values()
+        if t.status not in RUNNABLE_STATUSES and t.status != "passed"
     )
 
     if state.grand_start_time is not None and not state.all_done:
@@ -1166,7 +1346,6 @@ def _run_cycle(
         (os.path.getmtime(path) for path in project_sources if os.path.exists(path)),
         default=0,
     )
-    state = _build_state(suites, compile_jobs)
 
     if do_clean:
         subprocess.run(["make", "-C", BUILD_DIR, "clean"], capture_output=True)
@@ -1188,21 +1367,41 @@ def _run_cycle(
         selected_set = set(selected_test_ids)
 
     db = _load_db(BUILD_DIR)
+    state = SchedulerState(
+        max_parallel=options.max_parallel,
+        timeout_ms=options.timeout_ms,
+        binaries_by_id=binaries_by_id,
+    )
+    state.suites_order = list(suites)
+    now = time.perf_counter()
+
+    for i, (suite, test_name, test_file, binary) in enumerate(compile_jobs):
+        test_id = os.path.basename(binary)
+        state.suite_tests.setdefault(suite, []).append(test_id)
+        status = "pending_ready"
+        if selected_set is not None and test_id not in selected_set:
+            cached = db.get(test_id)
+            if cached:
+                status = cached.get("status", "passed")
+            else:
+                status = "passed"
+        test = TestItem(
+            test_id=test_id,
+            suite=suite,
+            test_name=test_name,
+            test_file=test_file,
+            binary=binary,
+            status=status,
+            time_status_changed=now + 0.001 * i,
+        )
+        if selected_set is not None and test_id not in selected_set:
+            cached = db.get(test_id)
+            if cached:
+                test.duration_ms = cached.get("duration_ms", 0)
+                test.output = cached.get("compile_error") or ""
+        state.tests[test_id] = test
 
     if live is not None:
-        if selected_set is not None:
-            for _, _, _, binary in compile_jobs:
-                test_id = os.path.basename(binary)
-                if test_id in selected_set:
-                    continue
-                cached = db.get(test_id)
-                if cached is None:
-                    continue
-                state.results[test_id] = TestResult(
-                    status=cached.get("status", "pending"),
-                    duration_ms=cached.get("duration_ms", 0),
-                    output=cached.get("compile_error") or "",
-                )
         if watch_status_getter is None:
             live.update(build_renderable(state))
         else:
@@ -1216,7 +1415,7 @@ def _run_cycle(
             continue
         targets.append(test_id)
     if not targets:
-        targets = [os.path.basename(binary) for _, _, _, binary in compile_jobs]
+        return False, set()
     make_result = subprocess.run(
         ["make", "-C", BUILD_DIR, f"-j{cpu_count}", *targets],
         capture_output=True,
@@ -1225,7 +1424,9 @@ def _run_cycle(
 
     dep_index = _collect_dependency_index(compile_jobs, project_sources)
 
-    make_output = "\n".join(part for part in (make_result.stderr, make_result.stdout) if part)
+    make_output = "\n".join(
+        part for part in (make_result.stderr, make_result.stdout) if part
+    )
     build_failed = make_result.returncode != 0
     make_errors = {}
     unassigned_make_errors = ""
@@ -1244,21 +1445,20 @@ def _run_cycle(
     for suite, test_name, test_file, binary in compile_jobs:
         test_id = os.path.basename(binary)
         deps = dep_index.get(test_id, [])
+        test = state.tests[test_id]
 
         if selected_set is not None and test_id not in selected_set:
             cached = db.get(test_id)
             if cached is not None:
-                cached_status = cached.get("status", "pending")
-                cached_duration = cached.get("duration_ms", 0)
-                state.results[test_id] = TestResult(
-                    status=cached_status,
-                    duration_ms=cached_duration,
-                    output=cached.get("compile_error") or "",
-                )
+                test.status = cached.get("status", "pending_ready")
+                test.duration_ms = cached.get("duration_ms", 0)
+                test.output = cached.get("compile_error") or ""
                 cached["deps"] = dep_index.get(test_id, cached.get("deps", []))
             continue
 
-        test_source_mtime = os.path.getmtime(test_file) if os.path.exists(test_file) else 0
+        test_source_mtime = (
+            os.path.getmtime(test_file) if os.path.exists(test_file) else 0
+        )
         binary_mtime = os.path.getmtime(binary) if os.path.exists(binary) else 0
         input_mtime = _max_mtime_for_deps(deps)
         if input_mtime == 0:
@@ -1273,9 +1473,8 @@ def _run_cycle(
                 "binary_mtime": None,
                 "deps": deps,
             }
-            res = TestResult(status="compile_fail", duration_ms=0)
-            res.output = make_errors[test_id]
-            state.results[test_id] = res
+            test.status = "compile_fail"
+            test.output = make_errors[test_id]
             if os.path.exists(binary):
                 os.remove(binary)
             continue
@@ -1289,9 +1488,8 @@ def _run_cycle(
                 "binary_mtime": None,
                 "deps": deps,
             }
-            res = TestResult(status="compile_fail", duration_ms=0)
-            res.output = generic_build_error
-            state.results[test_id] = res
+            test.status = "compile_fail"
+            test.output = generic_build_error
             if os.path.exists(binary):
                 os.remove(binary)
             continue
@@ -1303,17 +1501,15 @@ def _run_cycle(
                 and entry.get("compile_error")
                 and entry.get("source_mtime") == input_mtime
             ):
-                res = TestResult(status="compile_fail_cached", duration_ms=0)
-                res.output = entry["compile_error"]
-                state.results[test_id] = res
+                test.status = "compile_fail_cached"
+                test.output = entry["compile_error"]
                 os.remove(binary)
                 continue
             if entry is not None:
                 entry["compile_error"] = None
             os.remove(binary)
-            res = TestResult(status="compile_fail", duration_ms=0)
-            res.output = "Binary is stale (source modified) but no cached error"
-            state.results[test_id] = res
+            test.status = "compile_fail"
+            test.output = "Binary is stale (source modified) but no cached error"
             continue
 
         if not os.path.exists(binary):
@@ -1321,18 +1517,15 @@ def _run_cycle(
             if entry and entry.get("compile_error"):
                 cached_source_mtime = entry.get("source_mtime", 0)
                 if input_mtime == cached_source_mtime:
-                    res = TestResult(status="compile_fail_cached", duration_ms=0)
-                    res.output = entry["compile_error"]
-                    state.results[test_id] = res
+                    test.status = "compile_fail_cached"
+                    test.output = entry["compile_error"]
                     continue
                 entry["compile_error"] = None
-                res = TestResult(status="compile_fail", duration_ms=0)
-                res.output = "No binary produced but source differs from cached error"
-                state.results[test_id] = res
+                test.status = "compile_fail"
+                test.output = "No binary produced but source differs from cached error"
                 continue
-            res = TestResult(status="compile_fail", duration_ms=0)
-            res.output = "No binary found"
-            state.results[test_id] = res
+            test.status = "compile_fail"
+            test.output = "No binary found"
             continue
 
         db[test_id] = {
@@ -1344,18 +1537,6 @@ def _run_cycle(
             "deps": deps,
         }
 
-    relevant_test_ids = []
-    for _, _, _, binary in compile_jobs:
-        test_id = os.path.basename(binary)
-        if selected_set is not None and test_id not in selected_set:
-            continue
-        relevant_test_ids.append(test_id)
-
-    any_failed = any(
-        state.results.get(test_id) is not None
-        and state.results[test_id].status in ("compile_fail", "compile_fail_cached")
-        for test_id in relevant_test_ids
-    )
     grand_start = time.perf_counter()
     state.grand_start_time = grand_start
 
@@ -1372,160 +1553,14 @@ def _run_cycle(
         active_live = owned_live
 
     try:
+        state.state_changed()
         active_live.update(_render_state())
 
-        suite_selected_tests = {}
-        for suite in suites:
-            test_ids = state.suite_tests.get(suite, [])
-            if selected_set is not None:
-                test_ids = [test_id for test_id in test_ids if test_id in selected_set]
-            suite_selected_tests[suite] = test_ids
-            if not test_ids:
-                state.suite_total_ms[suite] = 0
-                state.suite_done.add(suite)
-            else:
-                state.suite_start_times[suite] = grand_start
+        while not state.all_done:
+            state._tick_event.wait(timeout=SPINNER_TICK_SECONDS)
+            state._tick_event.clear()
 
-        def _update_suite_completion(now=None):
-            current = now if now is not None else time.perf_counter()
-            for suite in suites:
-                tracked_ids = suite_selected_tests.get(suite, [])
-                if not tracked_ids:
-                    state.suite_total_ms[suite] = 0
-                    state.suite_done.add(suite)
-                    continue
-
-                has_active = any(
-                    state.results.get(test_id) is not None
-                    and state.results[test_id].status in ("pending", "running")
-                    for test_id in tracked_ids
-                )
-
-                if has_active:
-                    if suite in state.suite_done:
-                        state.suite_done.remove(suite)
-                    continue
-
-                if suite in state.suite_done:
-                    continue
-                start = state.suite_start_times.get(suite, grand_start)
-                state.suite_total_ms[suite] = (current - start) * 1000
-                state.suite_done.add(suite)
-
-        pending_queue = []
-        pending_set = set()
-        running_procs = {}
-        completion_queue = queue.Queue()
-        run_token_counter = 0
-
-        for test_id in relevant_test_ids:
-            if state.results[test_id].status in ("compile_fail", "compile_fail_cached"):
-                continue
-            binary = binaries_by_id.get(test_id)
-            if binary is None:
-                any_failed = True
-                res = TestResult(status="failed", duration_ms=0)
-                res.output = "Internal error: missing binary mapping"
-                state.results[test_id] = res
-                continue
-            pending_queue.append(test_id)
-            pending_set.add(test_id)
-
-        runnable_set = set(pending_queue)
-
-        def _reprioritize_impacted(impacted_ids):
-            impacted = []
-            seen = set()
-            for test_id in impacted_ids:
-                if test_id in seen:
-                    continue
-                seen.add(test_id)
-                if test_id not in runnable_set:
-                    continue
-                impacted.append(test_id)
-
-            if not impacted:
-                return
-
-            impacted_set = set(impacted)
-            for test_id in impacted:
-                if test_id not in state.results:
-                    continue
-                if state.results[test_id].status in ("compile_fail", "compile_fail_cached"):
-                    continue
-                state.results[test_id] = TestResult(status="pending", duration_ms=0)
-
-            for test_id in list(running_procs.keys()):
-                if test_id not in impacted_set:
-                    continue
-                proc = running_procs[test_id]["proc"]
-                _terminate_process(proc)
-                running_procs.pop(test_id, None)
-
-            pending_queue[:] = [test_id for test_id in pending_queue if test_id not in impacted_set]
-            pending_set.clear()
-            pending_set.update(pending_queue)
-
-            front = []
-            for test_id in impacted:
-                if test_id in running_procs:
-                    continue
-                if test_id in pending_set:
-                    continue
-                front.append(test_id)
-
-            if front:
-                pending_queue[:0] = front
-                pending_set.update(front)
-
-        _update_suite_completion(grand_start)
-        active_live.update(_render_state())
-
-        while pending_queue or running_procs:
-            while pending_queue and len(running_procs) < options.max_parallel:
-                test_id = pending_queue.pop(0)
-                pending_set.discard(test_id)
-                if test_id in running_procs:
-                    continue
-                binary = binaries_by_id.get(test_id)
-                if binary is None:
-                    any_failed = True
-                    res = TestResult(status="failed", duration_ms=0)
-                    res.output = "Internal error: missing binary mapping"
-                    state.results[test_id] = res
-                    continue
-                state.results[test_id].status = "running"
-                try:
-                    start_time = time.perf_counter()
-                    proc = subprocess.Popen(
-                        [binary],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-                except Exception as e:
-                    any_failed = True
-                    res = TestResult(status="failed", duration_ms=0)
-                    res.output = str(e)
-                    state.results[test_id] = res
-                    continue
-
-                run_token_counter += 1
-                run_token = run_token_counter
-                running_procs[test_id] = {
-                    "proc": proc,
-                    "start": start_time,
-                    "run_token": run_token,
-                }
-                watcher = threading.Thread(
-                    target=_monitor_test_completion,
-                    args=(test_id, run_token, proc, start_time, completion_queue),
-                    daemon=True,
-                )
-                watcher.start()
-                state.advance_spinner()
-                _update_suite_completion()
-                active_live.update(_render_state())
+            state.check_timeouts()
 
             if change_during_run_getter is not None:
                 fresh_changes = set(change_during_run_getter() or set())
@@ -1538,76 +1573,19 @@ def _run_cycle(
                     )
                     if selected_set is not None:
                         impacted_now = [
-                            test_id for test_id in impacted_now if test_id in selected_set
+                            test_id
+                            for test_id in impacted_now
+                            if test_id in selected_set
                         ]
-                    _reprioritize_impacted(impacted_now)
-                    state.advance_spinner()
-                    _update_suite_completion()
-                    active_live.update(_render_state())
+                    state.reprioritize(impacted_now)
 
-            completed_any = False
-            now = time.perf_counter()
-            for test_id in list(running_procs.keys()):
-                info = running_procs[test_id]
-                proc = info["proc"]
-                elapsed_ms = (now - info["start"]) * 1000
-                if elapsed_ms > options.timeout_ms:
-                    _terminate_process(proc)
-                    res = TestResult(status="timeout", duration_ms=elapsed_ms)
-                    res.output = f"Test exceeded {options.timeout_ms}ms limit"
-                    state.results[test_id] = res
-                    any_failed = True
-                    running_procs.pop(test_id, None)
-                    completed_any = True
+            state.state_changed()
 
-            def _consume_completion(item):
-                nonlocal any_failed, completed_any
-                test_id, run_token, rc, output, duration_ms = item
-                if test_id not in running_procs:
-                    return
-                if running_procs[test_id].get("run_token") != run_token:
-                    return
+            if state._dirty:
+                state._dirty = False
+                state.advance_spinner()
+                active_live.update(_render_state())
 
-                if rc == 139:
-                    res = TestResult(status="segfault", duration_ms=duration_ms)
-                    res.output = output.strip() if output.strip() else ""
-                elif rc != 0:
-                    res = TestResult(status="failed", duration_ms=duration_ms)
-                    res.output = output.strip() if output.strip() else ""
-                else:
-                    res = TestResult(status="passed", duration_ms=duration_ms)
-
-                state.results[test_id] = res
-                if res.status != "passed":
-                    any_failed = True
-                running_procs.pop(test_id, None)
-                completed_any = True
-
-            while True:
-                try:
-                    item = completion_queue.get_nowait()
-                except queue.Empty:
-                    break
-                _consume_completion(item)
-
-            if not completed_any and running_procs:
-                try:
-                    item = completion_queue.get(timeout=SPINNER_TICK_SECONDS)
-                    _consume_completion(item)
-                    while True:
-                        try:
-                            item = completion_queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        _consume_completion(item)
-                except queue.Empty:
-                    pass
-
-            state.advance_spinner()
-            _update_suite_completion()
-            active_live.update(_render_state())
-
-        _update_suite_completion(time.perf_counter())
         active_live.update(_render_state())
     finally:
         if owned_live is not None:
@@ -1621,21 +1599,23 @@ def _run_cycle(
         test_id = os.path.basename(binary)
         if selected_set is not None and test_id not in selected_set:
             continue
-        res = state.results.get(test_id)
-        if res and res.status not in ("compile_fail", "compile_fail_cached"):
+        test = state.tests.get(test_id)
+        if test and test.status not in ("compile_fail", "compile_fail_cached"):
             if test_id in db:
-                db[test_id]["status"] = res.status
-                db[test_id]["duration_ms"] = res.duration_ms
+                db[test_id]["status"] = test.status
+                db[test_id]["duration_ms"] = test.duration_ms
                 db[test_id]["compile_error"] = None
                 db[test_id]["binary_mtime"] = (
                     os.path.getmtime(binary) if os.path.exists(binary) else None
                 )
-                db[test_id]["deps"] = dep_index.get(test_id, db[test_id].get("deps", []))
+                db[test_id]["deps"] = dep_index.get(
+                    test_id, db[test_id].get("deps", [])
+                )
 
     _save_db(BUILD_DIR, db)
     if live is None:
         console.print(build_renderable(state))
-    return any_failed, queued_changes
+    return state.any_failed, queued_changes
 
 
 def main():
@@ -1691,7 +1671,9 @@ def main():
         def _get_watch_status():
             return watch_status["text"]
 
-        with Live(console=console, refresh_per_second=10, transient=False) as watch_live:
+        with Live(
+            console=console, refresh_per_second=10, transient=False
+        ) as watch_live:
             queued_watch_changes = set()
             if options.watch_initial:
                 watch_status["text"] = (
