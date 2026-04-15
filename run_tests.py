@@ -11,18 +11,21 @@ Usage:
     python3 run_tests.py table_create  # run specific suite
     python3 run_tests.py --max-parallel 5    # parallel test execution (default: 1)
     python3 run_tests.py --disable-ccache    # skip ccache
+    python3 run_tests.py --watch      # watch src/tests and rerun impacted tests
+    python3 run_tests.py --timeout-ms 3000  # set per-test timeout to 3 seconds
 """
 
 import fcntl
 import glob
 import hashlib
 import json
+import queue
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 
 
@@ -115,6 +118,42 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 TESTS_DIR = os.path.join(PROJECT_ROOT, "tests")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "test_build")
+WATCH_EXTENSIONS = {".c", ".h"}
+DEFAULT_TEST_TIMEOUT_MS = 10000
+SPINNER_TICK_SECONDS = 0.05
+
+
+@dataclass
+class RunnerOptions:
+    do_clean: bool = False
+    max_parallel: int = 1
+    use_ccache: bool = True
+    watch_mode: bool = False
+    watch_initial: bool = True
+    debounce_ms: int = 100
+    poll_interval_ms: int = 250
+    timeout_ms: int = DEFAULT_TEST_TIMEOUT_MS
+    requested_suites: list = None
+
+
+class _ChangedFilesBuffer:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._paths = set()
+
+    def add(self, rel_path):
+        if not rel_path:
+            return
+        with self._lock:
+            self._paths.add(rel_path)
+
+    def drain(self):
+        with self._lock:
+            if not self._paths:
+                return set()
+            paths = set(self._paths)
+            self._paths.clear()
+            return paths
 
 
 def _normalize_suite_id(value):
@@ -298,7 +337,22 @@ def _load_db(build_dir):
     if os.path.exists(path):
         try:
             with open(path) as f:
-                return json.load(f)
+                db = json.load(f)
+            for test_id, entry in db.items():
+                compile_error = entry.get("compile_error")
+                if not compile_error or not _is_make_noop_block(compile_error):
+                    continue
+                binary_path = os.path.join(build_dir, test_id)
+                entry["compile_error"] = None
+                entry["duration_ms"] = 0
+                entry["binary_mtime"] = (
+                    os.path.getmtime(binary_path) if os.path.exists(binary_path) else None
+                )
+                if os.path.exists(binary_path):
+                    entry["status"] = "passed"
+                else:
+                    entry["status"] = "pending"
+            return db
         except (json.JSONDecodeError, OSError):
             pass
     return {}
@@ -308,6 +362,493 @@ def _save_db(build_dir, db):
     path = os.path.join(build_dir, "db.json")
     with open(path, "w") as f:
         json.dump(db, f, indent=2)
+
+
+def _is_make_noop_line(line):
+    normalized = line.strip().lower()
+    if not normalized:
+        return True
+    return (
+        "is up to date." in normalized
+        or "nothing to be done for" in normalized
+        or "entering directory" in normalized
+        or "leaving directory" in normalized
+    )
+
+
+def _is_make_noop_block(block):
+    lines = [line for line in block.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return all(_is_make_noop_line(line) for line in lines)
+
+
+def _parse_cli_args(argv):
+    options = RunnerOptions(requested_suites=[])
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--help", "-h"):
+            _print_help()
+            sys.exit(0)
+        if arg == "--clean":
+            options.do_clean = True
+            i += 1
+            continue
+        if arg == "--disable-ccache":
+            options.use_ccache = False
+            i += 1
+            continue
+        if arg == "--watch":
+            options.watch_mode = True
+            i += 1
+            continue
+        if arg == "--watch-no-initial":
+            options.watch_mode = True
+            options.watch_initial = False
+            i += 1
+            continue
+        if arg == "--max-parallel":
+            if i + 1 >= len(argv):
+                print("--max-parallel requires a positive integer value")
+                sys.exit(1)
+            raw_value = argv[i + 1]
+            try:
+                options.max_parallel = int(raw_value)
+            except ValueError:
+                print(f"Invalid --max-parallel value: {raw_value}")
+                sys.exit(1)
+            if options.max_parallel < 1:
+                print("--max-parallel must be >= 1")
+                sys.exit(1)
+            i += 2
+            continue
+        if arg == "--debounce-ms":
+            if i + 1 >= len(argv):
+                print("--debounce-ms requires a positive integer value")
+                sys.exit(1)
+            raw_value = argv[i + 1]
+            try:
+                options.debounce_ms = int(raw_value)
+            except ValueError:
+                print(f"Invalid --debounce-ms value: {raw_value}")
+                sys.exit(1)
+            if options.debounce_ms < 1:
+                print("--debounce-ms must be >= 1")
+                sys.exit(1)
+            i += 2
+            continue
+        if arg == "--poll-interval-ms":
+            if i + 1 >= len(argv):
+                print("--poll-interval-ms requires a positive integer value")
+                sys.exit(1)
+            raw_value = argv[i + 1]
+            try:
+                options.poll_interval_ms = int(raw_value)
+            except ValueError:
+                print(f"Invalid --poll-interval-ms value: {raw_value}")
+                sys.exit(1)
+            if options.poll_interval_ms < 1:
+                print("--poll-interval-ms must be >= 1")
+                sys.exit(1)
+            i += 2
+            continue
+        if arg == "--timeout-ms":
+            if i + 1 >= len(argv):
+                print("--timeout-ms requires a positive integer value")
+                sys.exit(1)
+            raw_value = argv[i + 1]
+            try:
+                options.timeout_ms = int(raw_value)
+            except ValueError:
+                print(f"Invalid --timeout-ms value: {raw_value}")
+                sys.exit(1)
+            if options.timeout_ms < 1:
+                print("--timeout-ms must be >= 1")
+                sys.exit(1)
+            i += 2
+            continue
+        if arg.startswith("--"):
+            print(f"Unknown option: {arg}")
+            sys.exit(1)
+        options.requested_suites.append(arg)
+        i += 1
+
+    if options.use_ccache and shutil.which("ccache") is None:
+        options.use_ccache = False
+    return options
+
+
+def _resolve_requested_suites(requested):
+    all_suites = discover_suites()
+    suites = list(all_suites)
+    if requested:
+        suites, unknown = _match_requested_suites(all_suites, requested)
+        if unknown:
+            print(f"Unknown suites: {', '.join(sorted(set(unknown)))}")
+            print(f"Available: {', '.join(discover_suites())}")
+            sys.exit(1)
+    return suites
+
+
+def _build_compile_jobs(suites):
+    compile_jobs = []
+    binaries_by_id = {}
+    for suite in suites:
+        tests = discover_tests(suite)
+        for test_file in tests:
+            test_name = os.path.splitext(os.path.basename(test_file))[0]
+            target_name = _target_name_for_suite_test(suite, test_name)
+            binary = os.path.join(BUILD_DIR, target_name)
+            compile_jobs.append((suite, test_name, test_file, binary))
+            test_id = os.path.basename(binary)
+            binaries_by_id[test_id] = binary
+    return compile_jobs, binaries_by_id
+
+
+def _build_state(suites, compile_jobs):
+    state = TestState()
+    state.suites_order = suites
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        state.results[test_id] = TestResult(status="pending")
+        state.test_labels[test_id] = test_name
+        state.suite_tests.setdefault(suite, []).append(test_id)
+    return state
+
+
+def _normalize_to_project_rel(path):
+    normalized = os.path.normpath(path)
+    try:
+        rel = os.path.relpath(normalized, PROJECT_ROOT)
+    except ValueError:
+        return None
+    rel = rel.replace("\\", "/")
+    if rel.startswith("../"):
+        return None
+    return rel
+
+
+def _is_watch_candidate(rel_path):
+    ext = os.path.splitext(rel_path)[1].lower()
+    if ext in WATCH_EXTENSIONS:
+        return True
+    return False
+
+
+def _path_under(base, path):
+    try:
+        return os.path.commonpath([base, path]) == base
+    except ValueError:
+        return False
+
+
+def _collect_polling_snapshot():
+    snapshot = {}
+    for root in (SRC_DIR, TESTS_DIR):
+        if not os.path.isdir(root):
+            continue
+        for current_root, _, files in os.walk(root):
+            for name in files:
+                abs_path = os.path.join(current_root, name)
+                rel = _normalize_to_project_rel(abs_path)
+                if rel is None or not _is_watch_candidate(rel):
+                    continue
+                try:
+                    snapshot[rel] = os.path.getmtime(abs_path)
+                except OSError:
+                    continue
+    return snapshot
+
+
+def _poll_snapshot_changes(snapshot):
+    current = _collect_polling_snapshot()
+    changed = set()
+
+    for rel, mtime in current.items():
+        if rel not in snapshot or snapshot[rel] != mtime:
+            changed.add(rel)
+
+    for rel in snapshot:
+        if rel not in current:
+            changed.add(rel)
+
+    return changed, current
+
+
+def _wait_for_changes(get_changes_fn, debounce_ms, poll_interval_ms):
+    pending = set()
+    last_change_time = None
+    debounce_seconds = debounce_ms / 1000.0
+    poll_seconds = poll_interval_ms / 1000.0
+
+    while True:
+        fresh = get_changes_fn()
+        now = time.time()
+        if fresh:
+            pending.update(fresh)
+            last_change_time = now
+        elif pending and last_change_time is not None:
+            if now - last_change_time >= debounce_seconds:
+                return pending
+        time.sleep(poll_seconds)
+
+
+def _parse_dep_file(dep_path):
+    if not os.path.exists(dep_path):
+        return set()
+
+    try:
+        with open(dep_path) as f:
+            raw = f.read()
+    except OSError:
+        return set()
+
+    merged = raw.replace("\\\n", " ").replace("\n", " ")
+    if ":" not in merged:
+        return set()
+
+    _, deps_part = merged.split(":", 1)
+    deps = set()
+    for token in deps_part.split():
+        item = token.strip()
+        if not item:
+            continue
+        if item.endswith(":"):
+            item = item[:-1]
+        if not item:
+            continue
+        abs_dep = os.path.normpath(os.path.join(BUILD_DIR, item))
+        rel_dep = _normalize_to_project_rel(abs_dep)
+        if rel_dep is not None:
+            deps.add(rel_dep)
+    return deps
+
+
+def _collect_source_dep_index(project_sources):
+    index = {}
+    for source in project_sources:
+        rel_source_from_src = os.path.relpath(source, SRC_DIR)
+        dep_path = os.path.join(
+            BUILD_DIR, "obj", os.path.splitext(rel_source_from_src)[0] + ".d"
+        )
+        rel_source = _normalize_to_project_rel(source)
+        deps = _parse_dep_file(dep_path)
+        if rel_source is not None:
+            deps.add(rel_source)
+            index[rel_source] = deps
+    return index
+
+
+def _collect_test_dep_index(compile_jobs):
+    index = {}
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        dep_path = os.path.join(BUILD_DIR, test_id + ".d")
+        deps = _parse_dep_file(dep_path)
+        rel_test = _normalize_to_project_rel(test_file)
+        if rel_test is not None:
+            deps.add(rel_test)
+        index[test_id] = deps
+    return index
+
+
+def _collect_dependency_index(compile_jobs, project_sources):
+    source_dep_index = _collect_source_dep_index(project_sources)
+    test_dep_index = _collect_test_dep_index(compile_jobs)
+
+    header_to_sources = {}
+    source_headers = {}
+    for source_rel, deps in source_dep_index.items():
+        headers = {dep for dep in deps if dep.endswith(".h")}
+        source_headers[source_rel] = headers
+        for header in headers:
+            header_to_sources.setdefault(header, set()).add(source_rel)
+
+    merged = {}
+    for test_id, deps in test_dep_index.items():
+        combined = set(deps)
+        test_headers = {dep for dep in deps if dep.endswith(".h")}
+        source_matches = set()
+        for header in test_headers:
+            source_matches.update(header_to_sources.get(header, set()))
+        for source_rel in source_matches:
+            combined.add(source_rel)
+            combined.update(source_headers.get(source_rel, set()))
+        merged[test_id] = sorted(combined)
+    return merged
+
+
+def _max_mtime_for_deps(dep_paths):
+    if not dep_paths:
+        return 0
+    max_mtime = 0
+    for rel_path in dep_paths:
+        abs_path = os.path.join(PROJECT_ROOT, rel_path)
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except OSError:
+            continue
+        if mtime > max_mtime:
+            max_mtime = mtime
+    return max_mtime
+
+
+def _resolve_impacted_test_ids(changed_files, compile_jobs, db):
+    ordered_ids = [os.path.basename(binary) for _, _, _, binary in compile_jobs]
+    if not changed_files:
+        return []
+
+    dep_to_tests = {}
+    test_file_to_id = {}
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        rel_test = _normalize_to_project_rel(test_file)
+        if rel_test is not None:
+            test_file_to_id[rel_test] = test_id
+        entry = db.get(test_id, {})
+        deps = entry.get("deps") or []
+        for dep in deps:
+            dep_to_tests.setdefault(dep, set()).add(test_id)
+
+    impacted = set()
+    src_unmapped = False
+    tests_unmapped = False
+
+    for changed in changed_files:
+        impacted.update(dep_to_tests.get(changed, set()))
+        if changed in test_file_to_id:
+            impacted.add(test_file_to_id[changed])
+        if changed.startswith("src/") and changed not in dep_to_tests:
+            src_unmapped = True
+        if changed.startswith("tests/") and changed not in dep_to_tests:
+            ext = os.path.splitext(changed)[1].lower()
+            if ext in WATCH_EXTENSIONS and changed not in test_file_to_id:
+                tests_unmapped = True
+
+    if src_unmapped or tests_unmapped:
+        return ordered_ids
+
+    if not impacted:
+        return ordered_ids
+
+    return [test_id for test_id in ordered_ids if test_id in impacted]
+
+
+def _resolve_impacted_from_dep_index(changed_files, compile_jobs, dep_index):
+    ordered_ids = [os.path.basename(binary) for _, _, _, binary in compile_jobs]
+    if not changed_files:
+        return []
+
+    dep_to_tests = {}
+    test_file_to_id = {}
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        rel_test = _normalize_to_project_rel(test_file)
+        if rel_test is not None:
+            test_file_to_id[rel_test] = test_id
+        deps = dep_index.get(test_id, [])
+        for dep in deps:
+            dep_to_tests.setdefault(dep, set()).add(test_id)
+
+    impacted = set()
+    src_unmapped = False
+    tests_unmapped = False
+
+    for changed in changed_files:
+        impacted.update(dep_to_tests.get(changed, set()))
+        if changed in test_file_to_id:
+            impacted.add(test_file_to_id[changed])
+        if changed.startswith("src/") and changed not in dep_to_tests:
+            src_unmapped = True
+        if changed.startswith("tests/") and changed not in dep_to_tests:
+            ext = os.path.splitext(changed)[1].lower()
+            if ext in WATCH_EXTENSIONS and changed not in test_file_to_id:
+                tests_unmapped = True
+
+    if src_unmapped or tests_unmapped:
+        return ordered_ids
+    if not impacted:
+        return ordered_ids
+    return [test_id for test_id in ordered_ids if test_id in impacted]
+
+
+def _terminate_process(proc):
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=0.2)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=0.2)
+        except Exception:
+            pass
+
+
+def _monitor_test_completion(test_id, run_token, proc, start_time, done_queue):
+    try:
+        out, err = proc.communicate()
+    except Exception as exc:
+        out, err = "", str(exc)
+    duration_ms = (time.perf_counter() - start_time) * 1000
+    output = (out or "") + (err or "")
+    done_queue.put((test_id, run_token, proc.returncode, output, duration_ms))
+
+
+def _try_start_watchdog(buffer):
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except ImportError:
+        return None, "watchdog-not-installed"
+
+    class _Handler(FileSystemEventHandler):
+        def _add(self, path):
+            if not path:
+                return
+            abs_path = os.path.abspath(path)
+            if not (_path_under(SRC_DIR, abs_path) or _path_under(TESTS_DIR, abs_path)):
+                return
+            rel = _normalize_to_project_rel(abs_path)
+            if rel is None or not _is_watch_candidate(rel):
+                return
+            buffer.add(rel)
+
+        def on_created(self, event):
+            if not event.is_directory:
+                self._add(event.src_path)
+
+        def on_modified(self, event):
+            if not event.is_directory:
+                self._add(event.src_path)
+
+        def on_deleted(self, event):
+            if not event.is_directory:
+                self._add(event.src_path)
+
+        def on_moved(self, event):
+            if not event.is_directory:
+                self._add(event.src_path)
+                self._add(event.dest_path)
+
+    observer = Observer()
+    handler = _Handler()
+    try:
+        if os.path.isdir(SRC_DIR):
+            observer.schedule(handler, SRC_DIR, recursive=True)
+        if os.path.isdir(TESTS_DIR):
+            observer.schedule(handler, TESTS_DIR, recursive=True)
+        observer.start()
+    except Exception:
+        try:
+            observer.stop()
+            observer.join(timeout=1)
+        except Exception:
+            pass
+        return None, "watchdog-start-failed"
+    return observer, "watchdog"
 
 
 def _parse_make_errors(make_output, compile_jobs, build_dir):
@@ -341,6 +882,8 @@ def _parse_make_errors(make_output, compile_jobs, build_dir):
         if not lines:
             return
         block = "\n".join(lines)
+        if _is_make_noop_block(block):
+            return
         if target_id is None:
             unassigned.append(block)
             return
@@ -463,7 +1006,7 @@ def _build_error_panel(result):
         )
     if result.status == "timeout":
         return Panel(
-            "Test exceeded 10 second limit",
+            result.output.strip() if result.output.strip() else "Test exceeded timeout limit",
             title="Timeout",
             border_style="yellow",
             title_align="left",
@@ -547,6 +1090,13 @@ def build_renderable(state):
     return Group(*elements)
 
 
+def _build_watch_renderable(status_markup, state=None):
+    status = Text.from_markup(status_markup)
+    if state is None:
+        return Group(status)
+    return Group(status, build_renderable(state))
+
+
 def _print_help():
     BOLD = "\033[1m"
     DIM = "\033[2m"
@@ -572,6 +1122,11 @@ def _print_help():
   {BOLD}--clean{RESET}         Full rebuild from scratch ({DIM}make clean{RESET} + rebuild)
   {BOLD}--max-parallel N{RESET}  Max concurrent test processes ({GREEN}default: 1{RESET})
   {BOLD}--disable-ccache{RESET}  Disable ccache even if available
+    {BOLD}--watch{RESET}         Watch src/tests and rerun only impacted tests
+    {BOLD}--watch-no-initial{RESET}  Watch without running an initial test pass
+    {BOLD}--debounce-ms N{RESET}  Debounce watch events ({GREEN}default: 100{RESET})
+    {BOLD}--poll-interval-ms N{RESET}  Poll interval fallback ({GREEN}default: 250{RESET})
+    {BOLD}--timeout-ms N{RESET}  Per-test timeout in milliseconds ({GREEN}default: 10000{RESET})
   {BOLD}--help{RESET}           Show this help message
 
 {CYAN}EXAMPLES{RESET}
@@ -582,307 +1137,663 @@ def _print_help():
     python3 run_tests.py foo_tests/a_tests      {DIM}# run one nested suite path{RESET}
     python3 run_tests.py --max-parallel 5       {DIM}# run tests in parallel{RESET}
     python3 run_tests.py --disable-ccache       {DIM}# skip ccache{RESET}
+    python3 run_tests.py --watch                {DIM}# watch and rerun impacted tests{RESET}
+    python3 run_tests.py --watch --debounce-ms 500  {DIM}# slower debounce window{RESET}
+    python3 run_tests.py --timeout-ms 3000      {DIM}# set per-test timeout to 3s{RESET}
 """)
 
 
-def main():
-    if "--help" in sys.argv or "-h" in sys.argv:
-        _print_help()
-        sys.exit(0)
+def _run_cycle(
+    options,
+    suites,
+    compile_jobs,
+    binaries_by_id,
+    do_clean,
+    console,
+    live=None,
+    watch_status_getter=None,
+    selected_test_ids=None,
+    change_during_run_getter=None,
+):
+    if not compile_jobs:
+        print("No tests found for selected suites.")
+        return True, set()
 
-    do_clean = "--clean" in sys.argv
-    if do_clean:
-        sys.argv.remove("--clean")
-
-    max_parallel = 1
-    if "--max-parallel" in sys.argv:
-        idx = sys.argv.index("--max-parallel")
-        if idx + 1 >= len(sys.argv):
-            print("--max-parallel requires a positive integer value")
-            sys.exit(1)
-        raw_value = sys.argv[idx + 1]
-        try:
-            max_parallel = int(raw_value)
-        except ValueError:
-            print(f"Invalid --max-parallel value: {raw_value}")
-            sys.exit(1)
-        if max_parallel < 1:
-            print("--max-parallel must be >= 1")
-            sys.exit(1)
-        del sys.argv[idx : idx + 2]
-
-    use_ccache = "--disable-ccache" not in sys.argv
-    if "--disable-ccache" in sys.argv:
-        sys.argv.remove("--disable-ccache")
-
-    if use_ccache:
-        if shutil.which("ccache") is None:
-            use_ccache = False
-
-    all_suites = discover_suites()
-    suites = list(all_suites)
-    if len(sys.argv) > 1:
-        requested = sys.argv[1:]
-        suites, unknown = _match_requested_suites(all_suites, requested)
-        if unknown:
-            print(f"Unknown suites: {', '.join(sorted(set(unknown)))}")
-            print(f"Available: {', '.join(discover_suites())}")
-            sys.exit(1)
-
-    if not suites:
-        print("No test suites found.")
-        sys.exit(1)
+    queued_changes = set()
 
     project_sources = get_project_sources()
     project_sources_mtime = max(
         (os.path.getmtime(path) for path in project_sources if os.path.exists(path)),
         default=0,
     )
+    state = _build_state(suites, compile_jobs)
 
-    compile_jobs = []
-    binaries_by_id = {}
-    state = TestState()
-    for suite in suites:
-        tests = discover_tests(suite)
-        for test_file in tests:
-            test_name = os.path.splitext(os.path.basename(test_file))[0]
-            target_name = _target_name_for_suite_test(suite, test_name)
-            binary = os.path.join(BUILD_DIR, target_name)
-            compile_jobs.append((suite, test_name, test_file, binary))
-            test_id = os.path.basename(binary)
-            binaries_by_id[test_id] = binary
-            state.results[test_id] = TestResult(status="pending")
-            state.test_labels[test_id] = test_name
-            state.suite_tests.setdefault(suite, []).append(test_id)
-    state.suites_order = suites
+    if do_clean:
+        subprocess.run(["make", "-C", BUILD_DIR, "clean"], capture_output=True)
+        _save_db(BUILD_DIR, {})
 
-    lock_fd = _acquire_lock(BUILD_DIR)
-
-    try:
-        if do_clean:
-            subprocess.run(["make", "-C", BUILD_DIR, "clean"], capture_output=True)
-            _save_db(BUILD_DIR, {})
-
-        if _makefile_needs_regen(BUILD_DIR, compile_jobs, project_sources, use_ccache):
-            _generate_makefile(
-                BUILD_DIR, SRC_DIR, project_sources, compile_jobs, use_ccache
-            )
-
-        cpu_count = os.cpu_count() or 4
-        make_result = subprocess.run(
-            ["make", "-C", BUILD_DIR, f"-j{cpu_count}"],
-            capture_output=True,
-            text=True,
+    if _makefile_needs_regen(
+        BUILD_DIR, compile_jobs, project_sources, options.use_ccache
+    ):
+        _generate_makefile(
+            BUILD_DIR,
+            SRC_DIR,
+            project_sources,
+            compile_jobs,
+            options.use_ccache,
         )
 
-        db = _load_db(BUILD_DIR)
+    selected_set = None
+    if selected_test_ids is not None:
+        selected_set = set(selected_test_ids)
 
-        make_output = "\n".join(
-            part for part in (make_result.stderr, make_result.stdout) if part
-        )
-        build_failed = make_result.returncode != 0
-        make_errors = {}
-        unassigned_make_errors = ""
-        if build_failed:
-            make_errors, unassigned_make_errors = _parse_make_errors(
-                make_output, compile_jobs, BUILD_DIR
-            )
-        generic_build_error = (
-            unassigned_make_errors
-            or make_output.strip()
-            or "Build failed without diagnostic output"
-        )
+    db = _load_db(BUILD_DIR)
 
-        for suite, test_name, test_file, binary in compile_jobs:
-            test_id = os.path.basename(binary)
-            test_source_mtime = (
-                os.path.getmtime(test_file) if os.path.exists(test_file) else 0
-            )
-            binary_mtime = os.path.getmtime(binary) if os.path.exists(binary) else 0
+    if live is not None:
+        if selected_set is not None:
+            for _, _, _, binary in compile_jobs:
+                test_id = os.path.basename(binary)
+                if test_id in selected_set:
+                    continue
+                cached = db.get(test_id)
+                if cached is None:
+                    continue
+                state.results[test_id] = TestResult(
+                    status=cached.get("status", "pending"),
+                    duration_ms=cached.get("duration_ms", 0),
+                    output=cached.get("compile_error") or "",
+                )
+        if watch_status_getter is None:
+            live.update(build_renderable(state))
+        else:
+            live.update(_build_watch_renderable(watch_status_getter(), state))
+
+    cpu_count = os.cpu_count() or 4
+    targets = []
+    for _, _, _, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        if selected_set is not None and test_id not in selected_set:
+            continue
+        targets.append(test_id)
+    if not targets:
+        targets = [os.path.basename(binary) for _, _, _, binary in compile_jobs]
+    make_result = subprocess.run(
+        ["make", "-C", BUILD_DIR, f"-j{cpu_count}", *targets],
+        capture_output=True,
+        text=True,
+    )
+
+    dep_index = _collect_dependency_index(compile_jobs, project_sources)
+
+    make_output = "\n".join(part for part in (make_result.stderr, make_result.stdout) if part)
+    build_failed = make_result.returncode != 0
+    make_errors = {}
+    unassigned_make_errors = ""
+    if build_failed:
+        make_errors, unassigned_make_errors = _parse_make_errors(
+            make_output, compile_jobs, BUILD_DIR
+        )
+    generic_build_error = (
+        unassigned_make_errors
+        or make_output.strip()
+        or "Build failed without diagnostic output"
+    )
+    if _is_make_noop_block(generic_build_error):
+        generic_build_error = "Build failed without actionable compiler diagnostics"
+
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        deps = dep_index.get(test_id, [])
+
+        if selected_set is not None and test_id not in selected_set:
+            cached = db.get(test_id)
+            if cached is not None:
+                cached_status = cached.get("status", "pending")
+                cached_duration = cached.get("duration_ms", 0)
+                state.results[test_id] = TestResult(
+                    status=cached_status,
+                    duration_ms=cached_duration,
+                    output=cached.get("compile_error") or "",
+                )
+                cached["deps"] = dep_index.get(test_id, cached.get("deps", []))
+            continue
+
+        test_source_mtime = os.path.getmtime(test_file) if os.path.exists(test_file) else 0
+        binary_mtime = os.path.getmtime(binary) if os.path.exists(binary) else 0
+        input_mtime = _max_mtime_for_deps(deps)
+        if input_mtime == 0:
             input_mtime = max(test_source_mtime, project_sources_mtime)
 
-            if test_id in make_errors:
-                entry = {
-                    "status": "compile_fail",
-                    "duration_ms": 0,
-                    "compile_error": make_errors[test_id],
-                    "source_mtime": input_mtime,
-                    "binary_mtime": None,
-                }
-                db[test_id] = entry
-                res = TestResult(status="compile_fail", duration_ms=0)
-                res.output = make_errors[test_id]
-                state.results[test_id] = res
-                if os.path.exists(binary):
-                    os.remove(binary)
-                continue
+        if test_id in make_errors:
+            db[test_id] = {
+                "status": "compile_fail",
+                "duration_ms": 0,
+                "compile_error": make_errors[test_id],
+                "source_mtime": input_mtime,
+                "binary_mtime": None,
+                "deps": deps,
+            }
+            res = TestResult(status="compile_fail", duration_ms=0)
+            res.output = make_errors[test_id]
+            state.results[test_id] = res
+            if os.path.exists(binary):
+                os.remove(binary)
+            continue
 
-            if build_failed:
-                entry = {
-                    "status": "compile_fail",
-                    "duration_ms": 0,
-                    "compile_error": generic_build_error,
-                    "source_mtime": input_mtime,
-                    "binary_mtime": None,
-                }
-                db[test_id] = entry
-                res = TestResult(status="compile_fail", duration_ms=0)
-                res.output = generic_build_error
-                state.results[test_id] = res
-                if os.path.exists(binary):
-                    os.remove(binary)
-                continue
+        if build_failed:
+            db[test_id] = {
+                "status": "compile_fail",
+                "duration_ms": 0,
+                "compile_error": generic_build_error,
+                "source_mtime": input_mtime,
+                "binary_mtime": None,
+                "deps": deps,
+            }
+            res = TestResult(status="compile_fail", duration_ms=0)
+            res.output = generic_build_error
+            state.results[test_id] = res
+            if os.path.exists(binary):
+                os.remove(binary)
+            continue
 
-            if os.path.exists(binary) and input_mtime > binary_mtime:
-                entry = db.get(test_id)
-                if entry and entry.get("compile_error"):
+        if os.path.exists(binary) and input_mtime > binary_mtime:
+            entry = db.get(test_id)
+            if (
+                entry
+                and entry.get("compile_error")
+                and entry.get("source_mtime") == input_mtime
+            ):
+                res = TestResult(status="compile_fail_cached", duration_ms=0)
+                res.output = entry["compile_error"]
+                state.results[test_id] = res
+                os.remove(binary)
+                continue
+            if entry is not None:
+                entry["compile_error"] = None
+            os.remove(binary)
+            res = TestResult(status="compile_fail", duration_ms=0)
+            res.output = "Binary is stale (source modified) but no cached error"
+            state.results[test_id] = res
+            continue
+
+        if not os.path.exists(binary):
+            entry = db.get(test_id)
+            if entry and entry.get("compile_error"):
+                cached_source_mtime = entry.get("source_mtime", 0)
+                if input_mtime == cached_source_mtime:
                     res = TestResult(status="compile_fail_cached", duration_ms=0)
                     res.output = entry["compile_error"]
                     state.results[test_id] = res
-                    os.remove(binary)
                     continue
-                else:
-                    os.remove(binary)
-                    res = TestResult(status="compile_fail", duration_ms=0)
-                    res.output = "Binary is stale (source modified) but no cached error"
+                entry["compile_error"] = None
+                res = TestResult(status="compile_fail", duration_ms=0)
+                res.output = "No binary produced but source differs from cached error"
+                state.results[test_id] = res
+                continue
+            res = TestResult(status="compile_fail", duration_ms=0)
+            res.output = "No binary found"
+            state.results[test_id] = res
+            continue
+
+        db[test_id] = {
+            "status": "passed",
+            "duration_ms": 0,
+            "compile_error": None,
+            "source_mtime": input_mtime,
+            "binary_mtime": binary_mtime,
+            "deps": deps,
+        }
+
+    relevant_test_ids = []
+    for _, _, _, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        if selected_set is not None and test_id not in selected_set:
+            continue
+        relevant_test_ids.append(test_id)
+
+    any_failed = any(
+        state.results.get(test_id) is not None
+        and state.results[test_id].status in ("compile_fail", "compile_fail_cached")
+        for test_id in relevant_test_ids
+    )
+    grand_start = time.perf_counter()
+    state.grand_start_time = grand_start
+
+    def _render_state():
+        if watch_status_getter is None:
+            return build_renderable(state)
+        return _build_watch_renderable(watch_status_getter(), state)
+
+    owned_live = None
+    active_live = live
+    if active_live is None:
+        owned_live = Live(console=console, refresh_per_second=10, transient=True)
+        owned_live.start()
+        active_live = owned_live
+
+    try:
+        active_live.update(_render_state())
+
+        suite_selected_tests = {}
+        for suite in suites:
+            test_ids = state.suite_tests.get(suite, [])
+            if selected_set is not None:
+                test_ids = [test_id for test_id in test_ids if test_id in selected_set]
+            suite_selected_tests[suite] = test_ids
+            if not test_ids:
+                state.suite_total_ms[suite] = 0
+                state.suite_done.add(suite)
+            else:
+                state.suite_start_times[suite] = grand_start
+
+        def _update_suite_completion(now=None):
+            current = now if now is not None else time.perf_counter()
+            for suite in suites:
+                tracked_ids = suite_selected_tests.get(suite, [])
+                if not tracked_ids:
+                    state.suite_total_ms[suite] = 0
+                    state.suite_done.add(suite)
+                    continue
+
+                has_active = any(
+                    state.results.get(test_id) is not None
+                    and state.results[test_id].status in ("pending", "running")
+                    for test_id in tracked_ids
+                )
+
+                if has_active:
+                    if suite in state.suite_done:
+                        state.suite_done.remove(suite)
+                    continue
+
+                if suite in state.suite_done:
+                    continue
+                start = state.suite_start_times.get(suite, grand_start)
+                state.suite_total_ms[suite] = (current - start) * 1000
+                state.suite_done.add(suite)
+
+        pending_queue = []
+        pending_set = set()
+        running_procs = {}
+        completion_queue = queue.Queue()
+        run_token_counter = 0
+
+        for test_id in relevant_test_ids:
+            if state.results[test_id].status in ("compile_fail", "compile_fail_cached"):
+                continue
+            binary = binaries_by_id.get(test_id)
+            if binary is None:
+                any_failed = True
+                res = TestResult(status="failed", duration_ms=0)
+                res.output = "Internal error: missing binary mapping"
+                state.results[test_id] = res
+                continue
+            pending_queue.append(test_id)
+            pending_set.add(test_id)
+
+        runnable_set = set(pending_queue)
+
+        def _reprioritize_impacted(impacted_ids):
+            impacted = []
+            seen = set()
+            for test_id in impacted_ids:
+                if test_id in seen:
+                    continue
+                seen.add(test_id)
+                if test_id not in runnable_set:
+                    continue
+                impacted.append(test_id)
+
+            if not impacted:
+                return
+
+            impacted_set = set(impacted)
+            for test_id in impacted:
+                if test_id not in state.results:
+                    continue
+                if state.results[test_id].status in ("compile_fail", "compile_fail_cached"):
+                    continue
+                state.results[test_id] = TestResult(status="pending", duration_ms=0)
+
+            for test_id in list(running_procs.keys()):
+                if test_id not in impacted_set:
+                    continue
+                proc = running_procs[test_id]["proc"]
+                _terminate_process(proc)
+                running_procs.pop(test_id, None)
+
+            pending_queue[:] = [test_id for test_id in pending_queue if test_id not in impacted_set]
+            pending_set.clear()
+            pending_set.update(pending_queue)
+
+            front = []
+            for test_id in impacted:
+                if test_id in running_procs:
+                    continue
+                if test_id in pending_set:
+                    continue
+                front.append(test_id)
+
+            if front:
+                pending_queue[:0] = front
+                pending_set.update(front)
+
+        _update_suite_completion(grand_start)
+        active_live.update(_render_state())
+
+        while pending_queue or running_procs:
+            while pending_queue and len(running_procs) < options.max_parallel:
+                test_id = pending_queue.pop(0)
+                pending_set.discard(test_id)
+                if test_id in running_procs:
+                    continue
+                binary = binaries_by_id.get(test_id)
+                if binary is None:
+                    any_failed = True
+                    res = TestResult(status="failed", duration_ms=0)
+                    res.output = "Internal error: missing binary mapping"
+                    state.results[test_id] = res
+                    continue
+                state.results[test_id].status = "running"
+                try:
+                    start_time = time.perf_counter()
+                    proc = subprocess.Popen(
+                        [binary],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                except Exception as e:
+                    any_failed = True
+                    res = TestResult(status="failed", duration_ms=0)
+                    res.output = str(e)
                     state.results[test_id] = res
                     continue
 
-            if not os.path.exists(binary):
-                entry = db.get(test_id)
-                if entry and entry.get("compile_error"):
-                    cached_source_mtime = entry.get("source_mtime", 0)
-                    if input_mtime == cached_source_mtime:
-                        res = TestResult(status="compile_fail_cached", duration_ms=0)
-                        res.output = entry["compile_error"]
-                        state.results[test_id] = res
-                        continue
-                    else:
-                        res = TestResult(status="compile_fail", duration_ms=0)
-                        res.output = (
-                            "No binary produced but source differs from cached error"
-                        )
-                        state.results[test_id] = res
-                        continue
-                res = TestResult(status="compile_fail", duration_ms=0)
-                res.output = "No binary found"
+                run_token_counter += 1
+                run_token = run_token_counter
+                running_procs[test_id] = {
+                    "proc": proc,
+                    "start": start_time,
+                    "run_token": run_token,
+                }
+                watcher = threading.Thread(
+                    target=_monitor_test_completion,
+                    args=(test_id, run_token, proc, start_time, completion_queue),
+                    daemon=True,
+                )
+                watcher.start()
+                state.advance_spinner()
+                _update_suite_completion()
+                active_live.update(_render_state())
+
+            if change_during_run_getter is not None:
+                fresh_changes = set(change_during_run_getter() or set())
+                if fresh_changes:
+                    queued_changes.update(fresh_changes)
+                    impacted_now = _resolve_impacted_from_dep_index(
+                        fresh_changes,
+                        compile_jobs,
+                        dep_index,
+                    )
+                    if selected_set is not None:
+                        impacted_now = [
+                            test_id for test_id in impacted_now if test_id in selected_set
+                        ]
+                    _reprioritize_impacted(impacted_now)
+                    state.advance_spinner()
+                    _update_suite_completion()
+                    active_live.update(_render_state())
+
+            completed_any = False
+            now = time.perf_counter()
+            for test_id in list(running_procs.keys()):
+                info = running_procs[test_id]
+                proc = info["proc"]
+                elapsed_ms = (now - info["start"]) * 1000
+                if elapsed_ms > options.timeout_ms:
+                    _terminate_process(proc)
+                    res = TestResult(status="timeout", duration_ms=elapsed_ms)
+                    res.output = f"Test exceeded {options.timeout_ms}ms limit"
+                    state.results[test_id] = res
+                    any_failed = True
+                    running_procs.pop(test_id, None)
+                    completed_any = True
+
+            def _consume_completion(item):
+                nonlocal any_failed, completed_any
+                test_id, run_token, rc, output, duration_ms = item
+                if test_id not in running_procs:
+                    return
+                if running_procs[test_id].get("run_token") != run_token:
+                    return
+
+                if rc == 139:
+                    res = TestResult(status="segfault", duration_ms=duration_ms)
+                    res.output = output.strip() if output.strip() else ""
+                elif rc != 0:
+                    res = TestResult(status="failed", duration_ms=duration_ms)
+                    res.output = output.strip() if output.strip() else ""
+                else:
+                    res = TestResult(status="passed", duration_ms=duration_ms)
+
                 state.results[test_id] = res
-                continue
+                if res.status != "passed":
+                    any_failed = True
+                running_procs.pop(test_id, None)
+                completed_any = True
 
-            db[test_id] = {
-                "status": "passed",
-                "duration_ms": 0,
-                "compile_error": None,
-                "source_mtime": input_mtime,
-                "binary_mtime": binary_mtime,
-            }
+            while True:
+                try:
+                    item = completion_queue.get_nowait()
+                except queue.Empty:
+                    break
+                _consume_completion(item)
 
-        console = Console()
+            if not completed_any and running_procs:
+                try:
+                    item = completion_queue.get(timeout=SPINNER_TICK_SECONDS)
+                    _consume_completion(item)
+                    while True:
+                        try:
+                            item = completion_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        _consume_completion(item)
+                except queue.Empty:
+                    pass
 
-        any_failed = any(
-            r.status in ("compile_fail", "compile_fail_cached")
-            for r in state.results.values()
-        )
-        grand_start = time.perf_counter()
-        state.grand_start_time = grand_start
+            state.advance_spinner()
+            _update_suite_completion()
+            active_live.update(_render_state())
 
-        with Live(console=console, refresh_per_second=10, transient=True) as live:
-            live.update(build_renderable(state))
+        _update_suite_completion(time.perf_counter())
+        active_live.update(_render_state())
+    finally:
+        if owned_live is not None:
+            owned_live.stop()
 
-            for suite in suites:
-                test_ids = state.suite_tests.get(suite, [])
-                if not test_ids:
-                    state.suite_total_ms[suite] = 0
-                    state.suite_done.add(suite)
-                    live.update(build_renderable(state))
+    grand_end = time.perf_counter()
+    state.grand_ms = (grand_end - grand_start) * 1000
+    state.all_done = True
+
+    for suite, test_name, test_file, binary in compile_jobs:
+        test_id = os.path.basename(binary)
+        if selected_set is not None and test_id not in selected_set:
+            continue
+        res = state.results.get(test_id)
+        if res and res.status not in ("compile_fail", "compile_fail_cached"):
+            if test_id in db:
+                db[test_id]["status"] = res.status
+                db[test_id]["duration_ms"] = res.duration_ms
+                db[test_id]["compile_error"] = None
+                db[test_id]["binary_mtime"] = (
+                    os.path.getmtime(binary) if os.path.exists(binary) else None
+                )
+                db[test_id]["deps"] = dep_index.get(test_id, db[test_id].get("deps", []))
+
+    _save_db(BUILD_DIR, db)
+    if live is None:
+        console.print(build_renderable(state))
+    return any_failed, queued_changes
+
+
+def main():
+    options = _parse_cli_args(sys.argv)
+    suites = _resolve_requested_suites(options.requested_suites)
+    if not suites:
+        print("No test suites found.")
+        sys.exit(1)
+
+    lock_fd = _acquire_lock(BUILD_DIR)
+    console = Console()
+    observer = None
+    any_failed = False
+    clean_pending = options.do_clean
+
+    try:
+        compile_jobs, binaries_by_id = _build_compile_jobs(suites)
+        if not options.watch_mode:
+            any_failed, _ = _run_cycle(
+                options,
+                suites,
+                compile_jobs,
+                binaries_by_id,
+                clean_pending,
+                console,
+            )
+            clean_pending = False
+            sys.exit(1 if any_failed else 0)
+        change_buffer = _ChangedFilesBuffer()
+        observer, backend = _try_start_watchdog(change_buffer)
+        polling_snapshot = None
+        if observer is None:
+            backend = "polling"
+            polling_snapshot = _collect_polling_snapshot()
+
+        def _drain_watch_changes():
+            nonlocal polling_snapshot
+            if backend == "polling":
+                changes, polling_snapshot = _poll_snapshot_changes(polling_snapshot)
+                return changes
+            return change_buffer.drain()
+
+        watch_status = {
+            "text": "[cyan]watch[/cyan] waiting for file changes...",
+        }
+        if backend == "polling":
+            watch_status["text"] = (
+                "[yellow]watch[/yellow] polling backend active (watchdog unavailable)"
+            )
+        else:
+            watch_status["text"] = "[green]watch[/green] watchdog backend active"
+
+        def _get_watch_status():
+            return watch_status["text"]
+
+        with Live(console=console, refresh_per_second=10, transient=False) as watch_live:
+            queued_watch_changes = set()
+            if options.watch_initial:
+                watch_status["text"] = (
+                    f"{_get_watch_status()} | compiling initial test pass"
+                )
+                cycle_failed, cycle_changes = _run_cycle(
+                    options,
+                    suites,
+                    compile_jobs,
+                    binaries_by_id,
+                    clean_pending,
+                    console,
+                    live=watch_live,
+                    watch_status_getter=_get_watch_status,
+                    change_during_run_getter=_drain_watch_changes,
+                )
+                if cycle_failed:
+                    any_failed = True
+                queued_watch_changes.update(cycle_changes)
+                clean_pending = False
+            else:
+                watch_status["text"] = (
+                    f"{_get_watch_status()} | waiting for file changes..."
+                )
+                watch_live.update(_build_watch_renderable(_get_watch_status()))
+
+            while True:
+                if queued_watch_changes:
+                    changed = sorted(queued_watch_changes)
+                    queued_watch_changes.clear()
+                else:
+                    changed = _wait_for_changes(
+                        _drain_watch_changes,
+                        options.debounce_ms,
+                        options.poll_interval_ms,
+                    )
+                    changed = sorted(changed)
+                if not changed:
                     continue
 
-                suite_start = time.perf_counter()
-                state.suite_start_times[suite] = suite_start
-
-                run_futures = {}
-                with ProcessPoolExecutor(max_workers=max_parallel) as executor:
-                    for test_id in test_ids:
-                        binary = binaries_by_id.get(test_id)
-                        if binary is None:
-                            any_failed = True
-                            res = TestResult(status="failed", duration_ms=0)
-                            res.output = "Internal error: missing binary mapping"
-                            state.results[test_id] = res
-                            continue
-                        if state.results[test_id].status in (
-                            "compile_fail",
-                            "compile_fail_cached",
-                        ):
-                            any_failed = True
-                            continue
-                        state.results[test_id].status = "running"
-                        state.advance_spinner()
-                        live.update(build_renderable(state))
-                        future = executor.submit(run_single_test, binary)
-                        run_futures[future] = test_id
-
-                    for future in as_completed(run_futures):
-                        test_id = run_futures[future]
-                        try:
-                            rc, output, duration_ms, segfault, timeout = future.result()
-                        except Exception as e:
-                            res = TestResult(status="failed", duration_ms=0)
-                            res.output = f"Worker execution failed: {e}"
-                            state.results[test_id] = res
-                            state.advance_spinner()
-                            any_failed = True
-                            live.update(build_renderable(state))
-                            continue
-
-                        if timeout:
-                            res = TestResult(status="timeout", duration_ms=duration_ms)
-                        elif segfault or rc == 139:
-                            res = TestResult(status="segfault", duration_ms=duration_ms)
-                            res.output = output.strip() if output.strip() else ""
-                        elif rc != 0:
-                            res = TestResult(status="failed", duration_ms=duration_ms)
-                            res.output = output.strip() if output.strip() else ""
-                        else:
-                            res = TestResult(status="passed", duration_ms=duration_ms)
-
-                        state.results[test_id] = res
-                        state.advance_spinner()
-                        if res.status != "passed":
-                            any_failed = True
-                        live.update(build_renderable(state))
-
-                suite_end = time.perf_counter()
-                state.suite_total_ms[suite] = (suite_end - suite_start) * 1000
-                state.suite_done.add(suite)
-                live.update(build_renderable(state))
-
-        grand_end = time.perf_counter()
-        state.grand_ms = (grand_end - grand_start) * 1000
-        state.all_done = True
-
-        for suite, test_name, test_file, binary in compile_jobs:
-            test_id = os.path.basename(binary)
-            res = state.results.get(test_id)
-            if res and res.status not in ("compile_fail", "compile_fail_cached"):
-                if test_id in db:
-                    db[test_id]["status"] = res.status
-                    db[test_id]["duration_ms"] = res.duration_ms
-                    db[test_id]["compile_error"] = None
-                    db[test_id]["binary_mtime"] = (
-                        os.path.getmtime(binary) if os.path.exists(binary) else None
+                suites = _resolve_requested_suites(options.requested_suites)
+                if not suites:
+                    watch_status["text"] = (
+                        "[yellow]watch[/yellow] no suites found after change"
                     )
+                    watch_live.update(_build_watch_renderable(_get_watch_status()))
+                    continue
 
-        _save_db(BUILD_DIR, db)
+                compile_jobs, binaries_by_id = _build_compile_jobs(suites)
+                if not compile_jobs:
+                    watch_status["text"] = (
+                        "[yellow]watch[/yellow] no tests discovered after change"
+                    )
+                    watch_live.update(_build_watch_renderable(_get_watch_status()))
+                    continue
 
-        console.print(build_renderable(state))
-        sys.exit(1 if any_failed else 0)
+                db = _load_db(BUILD_DIR)
+                impacted_ids = _resolve_impacted_test_ids(changed, compile_jobs, db)
+                impacted_set = set(impacted_ids)
+
+                preview = ", ".join(changed[:4])
+                if len(changed) > 4:
+                    preview += ", ..."
+                watch_status["text"] = (
+                    "[cyan]watch[/cyan] change detected "
+                    f"({preview}) -> compiling {len(impacted_set)} test(s)"
+                )
+
+                cycle_failed, cycle_changes = _run_cycle(
+                    options,
+                    suites,
+                    compile_jobs,
+                    binaries_by_id,
+                    clean_pending,
+                    console,
+                    live=watch_live,
+                    watch_status_getter=_get_watch_status,
+                    selected_test_ids=impacted_set,
+                    change_during_run_getter=_drain_watch_changes,
+                )
+                queued_watch_changes.update(cycle_changes)
+                clean_pending = False
+                if cycle_failed:
+                    any_failed = True
+
+    except KeyboardInterrupt:
+        print()
+        console.print("[cyan]watch[/cyan] stopped")
     finally:
+        if observer is not None:
+            try:
+                observer.stop()
+                observer.join(timeout=1)
+            except Exception:
+                pass
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
         except Exception:
             pass
+
+    sys.exit(1 if any_failed else 0)
 
 
 if __name__ == "__main__":

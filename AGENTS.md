@@ -5,9 +5,8 @@
 ├── Makefile
 ├── AGENTS.md
 └── src/
-    ├── lib.h          — Core types: t_fork, t_philosopher, t_config, t_table
+    ├── lib.h          — Core types + argument parsing declarations
     ├── main.c         — Entry point: parse args, create/destroy table
-    ├── utils.h        — Forward declarations for utils.c
     └── utils.c        — Argument validation and parsing (is_valid_number, parse_argument, parse_arguments)
 
 philo_bonus/ (not yet started)
@@ -20,9 +19,8 @@ philo_bonus/ (not yet started)
 
 | File | Functions | Description |
 |------|-----------|-------------|
-| `src/lib.h` | — | Defines `t_fork` (pthread_mutex_t lock), `t_philosopher` (left/right fork pointers), `t_config` (philosophers_count, time_to_die/eat/sleep, meals_required), `t_table` (philosophers array, forks array, count) |
-| `src/main.c` | `create_table()`, `destroy_table()`, `main()` | Allocates philosophers/forks arrays, assigns circular fork pointers, handles arg parse errors with printf |
-| `src/utils.h` | — | Forward declarations: `is_valid_number()`, `parse_argument()`, `parse_arguments()` |
+| `src/lib.h` | — | Defines `t_fork` (pthread_mutex_t lock), `t_philosopher` (left/right fork pointers), `t_config` (philosophers_count, time_to_die/eat/sleep, meals_required), `t_table` (philosophers array, forks array, count), and forward declarations for argument parsing |
+| `src/main.c` | `main()` | Entry point: parse args, create/destroy table |
 | `src/utils.c` | `is_valid_number()`, `parse_argument()`, `parse_arguments()` | Validates positive integer strings, converts via atoi (TEMPORARY), populates t_config. No printf — error printing is in main.c |
 
 ### Struct Layout
