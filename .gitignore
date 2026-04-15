@@ -76,6 +76,7 @@ Thumbs.db
 
 # Build directories
 build/
+test_build/
 obj/
 bin/
 

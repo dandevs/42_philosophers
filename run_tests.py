@@ -15,6 +15,7 @@ Usage:
 
 import fcntl
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -42,7 +43,11 @@ def _prompt_install_rich():
     print(f"    {RED}4){RESET} Abort")
     print()
 
-    choice = input(f"  Enter choice [{BOLD}1{RESET}] (default: pip): ").strip()
+    try:
+        choice = input(f"  Enter choice [{BOLD}1{RESET}] (default: pip): ").strip()
+    except EOFError:
+        print(f"  {RED}No interactive input available.{RESET}")
+        return False
 
     commands = {
         "1": [sys.executable, "-m", "pip", "install", "rich"],
@@ -190,12 +195,20 @@ def _generate_makefile(build_dir, src_dir, project_sources, compile_jobs, use_cc
     return makefile_path
 
 
-def _makefile_needs_regen(build_dir, compile_jobs):
+def _makefile_needs_regen(build_dir, compile_jobs, project_sources, use_ccache):
     """Check if Makefile needs regeneration by comparing manifest."""
     manifest_path = os.path.join(build_dir, ".manifest")
-    current = "\n".join(
+    jobs_manifest = "\n".join(
         f"{suite}:{test_file}:{os.path.basename(binary)}"
         for suite, test_name, test_file, binary in compile_jobs
+    )
+    sources_manifest = "\n".join(
+        sorted(os.path.relpath(path, build_dir) for path in project_sources)
+    )
+    current = (
+        f"use_ccache={1 if use_ccache else 0}\n"
+        f"sources:\n{sources_manifest}\n"
+        f"jobs:\n{jobs_manifest}"
     )
     if os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -218,7 +231,92 @@ def _acquire_lock(build_dir):
         return lock_fd
     except (IOError, OSError):
         print("Another test run is in progress. Skipping.")
-        sys.exit(0)
+        sys.exit(2)
+
+
+def _load_db(build_dir):
+    path = os.path.join(build_dir, "db.json")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_db(build_dir, db):
+    path = os.path.join(build_dir, "db.json")
+    with open(path, "w") as f:
+        json.dump(db, f, indent=2)
+
+
+def _parse_make_errors(make_output, compile_jobs, build_dir):
+    if not make_output or not make_output.strip():
+        return {}, ""
+
+    job_entries = []
+    basename_to_ids = {}
+    for suite, test_name, test_file, binary in compile_jobs:
+        job_id = os.path.basename(binary)
+        rel_test = os.path.normpath(os.path.relpath(test_file, build_dir)).replace(
+            "\\", "/"
+        )
+        abs_test = os.path.normpath(test_file).replace("\\", "/")
+        basename = os.path.basename(test_file)
+        basename_to_ids.setdefault(basename, []).append(job_id)
+        job_entries.append(
+            {
+                "job_id": job_id,
+                "binary": os.path.basename(binary),
+                "rel_test": rel_test,
+                "abs_test": abs_test,
+                "basename": basename,
+            }
+        )
+
+    errors = {}
+    unassigned = []
+
+    def _append_block(target_id, lines):
+        if not lines:
+            return
+        block = "\n".join(lines)
+        if target_id is None:
+            unassigned.append(block)
+            return
+        if target_id in errors and errors[target_id]:
+            errors[target_id] = errors[target_id] + "\n" + block
+        else:
+            errors[target_id] = block
+
+    def _match_job_id(line):
+        normalized = line.replace("\\", "/")
+
+        for entry in job_entries:
+            if entry["binary"] in line:
+                return entry["job_id"]
+        for entry in job_entries:
+            if entry["rel_test"] in normalized or entry["abs_test"] in normalized:
+                return entry["job_id"]
+        for basename, ids in basename_to_ids.items():
+            if len(ids) == 1 and basename in normalized:
+                return ids[0]
+        return None
+
+    current_id = None
+    current_lines = []
+    for line in make_output.splitlines():
+        matched_id = _match_job_id(line)
+        if matched_id is not None and matched_id != current_id:
+            _append_block(current_id, current_lines)
+            current_id = matched_id
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    _append_block(current_id, current_lines)
+    return errors, "\n".join(unassigned).strip()
 
 
 def run_single_test(binary_path):
@@ -233,9 +331,12 @@ def run_single_test(binary_path):
     except subprocess.TimeoutExpired:
         duration_ms = (time.perf_counter() - start) * 1000
         return -1, "", duration_ms, False, True
-    except Exception:
+    except (FileNotFoundError, PermissionError, OSError) as e:
         duration_ms = (time.perf_counter() - start) * 1000
-        return 139, "", duration_ms, True, False
+        return 1, str(e), duration_ms, False, False
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
+        return 1, str(e), duration_ms, False, False
 
 
 @dataclass
@@ -248,6 +349,7 @@ class TestResult:
 class TestState:
     def __init__(self):
         self.results = {}
+        self.test_labels = {}
         self.suites_order = []
         self.suite_tests = {}
         self.suite_done = set()
@@ -277,11 +379,14 @@ class TestState:
 
 
 def _build_error_panel(result):
-    if result.status == "compile_fail":
+    if result.status in ("compile_fail", "compile_fail_cached"):
         content = Text.from_ansi(result.output) if result.output else Text("")
+        title = "Compilation Error"
+        if result.status == "compile_fail_cached":
+            title = "Compilation Error (cached)"
         return Panel(
             content,
-            title="Compilation Error",
+            title=title,
             border_style="red",
             title_align="left",
         )
@@ -318,7 +423,7 @@ def build_renderable(state):
     now = time.perf_counter()
 
     for suite in state.suites_order:
-        test_names = state.suite_tests.get(suite, [])
+        test_ids = state.suite_tests.get(suite, [])
         is_done = suite in state.suite_done
         guide_style = state._suite_guide_style(suite)
 
@@ -332,21 +437,30 @@ def build_renderable(state):
 
         tree = Tree(label, guide_style=guide_style)
 
-        max_name_len = max((len(tn) for tn in test_names), default=0)
+        max_name_len = max(
+            (len(state.test_labels.get(test_id, test_id)) for test_id in test_ids),
+            default=0,
+        )
 
-        for tn in test_names:
-            res = state.results.get(tn)
+        for test_id in test_ids:
+            label = state.test_labels.get(test_id, test_id)
+            res = state.results.get(test_id)
             if res is None or res.status in ("pending", "running"):
-                padded = tn.ljust(max_name_len)
-                tree.add(Text(f"{state.spinner} {padded}  running...", style="yellow"))
+                padded = label.ljust(max_name_len)
+                tree.add(Text(f"{state.spinner} {padded}  pending", style="yellow"))
             elif res.status == "passed":
-                padded = tn.ljust(max_name_len)
+                padded = label.ljust(max_name_len)
                 tree.add(Text(f"✓ {padded}  [{res.duration_ms:.0f}ms]", style="green"))
             else:
-                padded = tn.ljust(max_name_len)
-                fail_node = tree.add(
-                    Text(f"✗ {padded}  [{res.duration_ms:.0f}ms]", style="bold red")
-                )
+                padded = label.ljust(max_name_len)
+                if res.status == "compile_fail_cached":
+                    fail_node = tree.add(
+                        Text(f"✗ {padded}  [cached]", style="bold red")
+                    )
+                else:
+                    fail_node = tree.add(
+                        Text(f"✗ {padded}  [{res.duration_ms:.0f}ms]", style="bold red")
+                    )
                 fail_node.add(_build_error_panel(res))
 
         elements.append(tree)
@@ -374,7 +488,47 @@ def build_renderable(state):
     return Group(*elements)
 
 
+def _print_help():
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    CYAN = "\033[36m"
+    GREEN = "\033[32m"
+    RESET = "\033[0m"
+
+    print(f"""
+{BOLD}Philosophers Test Runner{RESET}
+
+{CYAN}USAGE{RESET}
+  python3 run_tests.py {DIM}[OPTIONS] [SUITE...]{RESET}
+
+{CYAN}DESCRIPTION{RESET}
+  Discovers and runs C test suites with incremental builds via make.
+  Only recompiles files that have changed since the last run.
+
+{CYAN}ARGUMENTS{RESET}
+  {BOLD}SUITE...{RESET}        Test suite(s) to run (default: all)
+                  Available: {", ".join(discover_suites()) or "(none)"}
+
+{CYAN}OPTIONS{RESET}
+  {BOLD}--clean{RESET}         Full rebuild from scratch ({DIM}make clean{RESET} + rebuild)
+  {BOLD}--max-parallel N{RESET}  Max concurrent test processes ({GREEN}default: 1{RESET})
+  {BOLD}--disable-ccache{RESET}  Disable ccache even if available
+  {BOLD}--help{RESET}           Show this help message
+
+{CYAN}EXAMPLES{RESET}
+  python3 run_tests.py                        {DIM}# incremental build + run all{RESET}
+  python3 run_tests.py --clean                {DIM}# full rebuild{RESET}
+  python3 run_tests.py table_create           {DIM}# run a specific suite{RESET}
+  python3 run_tests.py --max-parallel 5       {DIM}# run tests in parallel{RESET}
+  python3 run_tests.py --disable-ccache       {DIM}# skip ccache{RESET}
+""")
+
+
 def main():
+    if "--help" in sys.argv or "-h" in sys.argv:
+        _print_help()
+        sys.exit(0)
+
     do_clean = "--clean" in sys.argv
     if do_clean:
         sys.argv.remove("--clean")
@@ -382,13 +536,19 @@ def main():
     max_parallel = 1
     if "--max-parallel" in sys.argv:
         idx = sys.argv.index("--max-parallel")
-        if idx + 1 < len(sys.argv):
-            try:
-                max_parallel = int(sys.argv[idx + 1])
-            except ValueError:
-                pass
-            sys.argv.pop(idx + 1)
-        sys.argv.pop(idx)
+        if idx + 1 >= len(sys.argv):
+            print("--max-parallel requires a positive integer value")
+            sys.exit(1)
+        raw_value = sys.argv[idx + 1]
+        try:
+            max_parallel = int(raw_value)
+        except ValueError:
+            print(f"Invalid --max-parallel value: {raw_value}")
+            sys.exit(1)
+        if max_parallel < 1:
+            print("--max-parallel must be >= 1")
+            sys.exit(1)
+        del sys.argv[idx : idx + 2]
 
     use_ccache = "--disable-ccache" not in sys.argv
     if "--disable-ccache" in sys.argv:
@@ -413,8 +573,13 @@ def main():
         sys.exit(1)
 
     project_sources = get_project_sources()
+    project_sources_mtime = max(
+        (os.path.getmtime(path) for path in project_sources if os.path.exists(path)),
+        default=0,
+    )
 
     compile_jobs = []
+    binaries_by_id = {}
     state = TestState()
     for suite in suites:
         tests = discover_tests(suite)
@@ -422,8 +587,11 @@ def main():
             test_name = os.path.splitext(os.path.basename(test_file))[0]
             binary = os.path.join(BUILD_DIR, f"{suite}_{test_name}")
             compile_jobs.append((suite, test_name, test_file, binary))
-            state.results[test_name] = TestResult(status="pending")
-            state.suite_tests.setdefault(suite, []).append(test_name)
+            test_id = os.path.basename(binary)
+            binaries_by_id[test_id] = binary
+            state.results[test_id] = TestResult(status="pending")
+            state.test_labels[test_id] = test_name
+            state.suite_tests.setdefault(suite, []).append(test_id)
     state.suites_order = suites
 
     lock_fd = _acquire_lock(BUILD_DIR)
@@ -431,8 +599,9 @@ def main():
     try:
         if do_clean:
             subprocess.run(["make", "-C", BUILD_DIR, "clean"], capture_output=True)
+            _save_db(BUILD_DIR, {})
 
-        if _makefile_needs_regen(BUILD_DIR, compile_jobs):
+        if _makefile_needs_regen(BUILD_DIR, compile_jobs, project_sources, use_ccache):
             _generate_makefile(
                 BUILD_DIR, SRC_DIR, project_sources, compile_jobs, use_ccache
             )
@@ -444,29 +613,114 @@ def main():
             text=True,
         )
 
-        if make_result.returncode != 0:
-            for suite, test_name, test_file, binary in compile_jobs:
-                if not os.path.exists(binary):
-                    test_basename = os.path.basename(test_file)
-                    relevant = []
-                    for line in make_result.stderr.splitlines():
-                        if test_basename in line or test_file in line:
-                            relevant.append(line)
-                    if not relevant:
-                        relevant = make_result.stderr.splitlines()
-                    error_output = "\n".join(relevant)
+        db = _load_db(BUILD_DIR)
+
+        make_output = "\n".join(
+            part for part in (make_result.stderr, make_result.stdout) if part
+        )
+        build_failed = make_result.returncode != 0
+        make_errors = {}
+        unassigned_make_errors = ""
+        if build_failed:
+            make_errors, unassigned_make_errors = _parse_make_errors(
+                make_output, compile_jobs, BUILD_DIR
+            )
+        generic_build_error = (
+            unassigned_make_errors
+            or make_output.strip()
+            or "Build failed without diagnostic output"
+        )
+
+        for suite, test_name, test_file, binary in compile_jobs:
+            test_id = os.path.basename(binary)
+            test_source_mtime = (
+                os.path.getmtime(test_file) if os.path.exists(test_file) else 0
+            )
+            binary_mtime = os.path.getmtime(binary) if os.path.exists(binary) else 0
+            input_mtime = max(test_source_mtime, project_sources_mtime)
+
+            if test_id in make_errors:
+                entry = {
+                    "status": "compile_fail",
+                    "duration_ms": 0,
+                    "compile_error": make_errors[test_id],
+                    "source_mtime": input_mtime,
+                    "binary_mtime": None,
+                }
+                db[test_id] = entry
+                res = TestResult(status="compile_fail", duration_ms=0)
+                res.output = make_errors[test_id]
+                state.results[test_id] = res
+                if os.path.exists(binary):
+                    os.remove(binary)
+                continue
+
+            if build_failed:
+                entry = {
+                    "status": "compile_fail",
+                    "duration_ms": 0,
+                    "compile_error": generic_build_error,
+                    "source_mtime": input_mtime,
+                    "binary_mtime": None,
+                }
+                db[test_id] = entry
+                res = TestResult(status="compile_fail", duration_ms=0)
+                res.output = generic_build_error
+                state.results[test_id] = res
+                if os.path.exists(binary):
+                    os.remove(binary)
+                continue
+
+            if os.path.exists(binary) and input_mtime > binary_mtime:
+                entry = db.get(test_id)
+                if entry and entry.get("compile_error"):
+                    res = TestResult(status="compile_fail_cached", duration_ms=0)
+                    res.output = entry["compile_error"]
+                    state.results[test_id] = res
+                    os.remove(binary)
+                    continue
+                else:
+                    os.remove(binary)
                     res = TestResult(status="compile_fail", duration_ms=0)
-                    res.output = (
-                        error_output.strip()
-                        if error_output.strip()
-                        else make_result.stderr.strip()
-                    )
-                    if test_name in state.results:
-                        state.results[test_name] = res
+                    res.output = "Binary is stale (source modified) but no cached error"
+                    state.results[test_id] = res
+                    continue
+
+            if not os.path.exists(binary):
+                entry = db.get(test_id)
+                if entry and entry.get("compile_error"):
+                    cached_source_mtime = entry.get("source_mtime", 0)
+                    if input_mtime == cached_source_mtime:
+                        res = TestResult(status="compile_fail_cached", duration_ms=0)
+                        res.output = entry["compile_error"]
+                        state.results[test_id] = res
+                        continue
+                    else:
+                        res = TestResult(status="compile_fail", duration_ms=0)
+                        res.output = (
+                            "No binary produced but source differs from cached error"
+                        )
+                        state.results[test_id] = res
+                        continue
+                res = TestResult(status="compile_fail", duration_ms=0)
+                res.output = "No binary found"
+                state.results[test_id] = res
+                continue
+
+            db[test_id] = {
+                "status": "passed",
+                "duration_ms": 0,
+                "compile_error": None,
+                "source_mtime": input_mtime,
+                "binary_mtime": binary_mtime,
+            }
 
         console = Console()
 
-        any_failed = any(r.status == "compile_fail" for r in state.results.values())
+        any_failed = any(
+            r.status in ("compile_fail", "compile_fail_cached")
+            for r in state.results.values()
+        )
         grand_start = time.perf_counter()
         state.grand_start_time = grand_start
 
@@ -474,8 +728,8 @@ def main():
             live.update(build_renderable(state))
 
             for suite in suites:
-                test_names = state.suite_tests.get(suite, [])
-                if not test_names:
+                test_ids = state.suite_tests.get(suite, [])
+                if not test_ids:
                     state.suite_total_ms[suite] = 0
                     state.suite_done.add(suite)
                     live.update(build_renderable(state))
@@ -486,26 +740,38 @@ def main():
 
                 run_futures = {}
                 with ProcessPoolExecutor(max_workers=max_parallel) as executor:
-                    for tn in test_names:
-                        binary = None
-                        for s, t_name, t_file, b in compile_jobs:
-                            if t_name == tn and s == suite:
-                                binary = b
-                                break
+                    for test_id in test_ids:
+                        binary = binaries_by_id.get(test_id)
                         if binary is None:
+                            any_failed = True
+                            res = TestResult(status="failed", duration_ms=0)
+                            res.output = "Internal error: missing binary mapping"
+                            state.results[test_id] = res
                             continue
-                        if state.results[tn].status == "compile_fail":
+                        if state.results[test_id].status in (
+                            "compile_fail",
+                            "compile_fail_cached",
+                        ):
                             any_failed = True
                             continue
-                        state.results[tn].status = "running"
+                        state.results[test_id].status = "running"
                         state.advance_spinner()
                         live.update(build_renderable(state))
                         future = executor.submit(run_single_test, binary)
-                        run_futures[future] = tn
+                        run_futures[future] = test_id
 
                     for future in as_completed(run_futures):
-                        test_name = run_futures[future]
-                        rc, output, duration_ms, segfault, timeout = future.result()
+                        test_id = run_futures[future]
+                        try:
+                            rc, output, duration_ms, segfault, timeout = future.result()
+                        except Exception as e:
+                            res = TestResult(status="failed", duration_ms=0)
+                            res.output = f"Worker execution failed: {e}"
+                            state.results[test_id] = res
+                            state.advance_spinner()
+                            any_failed = True
+                            live.update(build_renderable(state))
+                            continue
 
                         if timeout:
                             res = TestResult(status="timeout", duration_ms=duration_ms)
@@ -518,7 +784,7 @@ def main():
                         else:
                             res = TestResult(status="passed", duration_ms=duration_ms)
 
-                        state.results[test_name] = res
+                        state.results[test_id] = res
                         state.advance_spinner()
                         if res.status != "passed":
                             any_failed = True
@@ -532,6 +798,20 @@ def main():
         grand_end = time.perf_counter()
         state.grand_ms = (grand_end - grand_start) * 1000
         state.all_done = True
+
+        for suite, test_name, test_file, binary in compile_jobs:
+            test_id = os.path.basename(binary)
+            res = state.results.get(test_id)
+            if res and res.status not in ("compile_fail", "compile_fail_cached"):
+                if test_id in db:
+                    db[test_id]["status"] = res.status
+                    db[test_id]["duration_ms"] = res.duration_ms
+                    db[test_id]["compile_error"] = None
+                    db[test_id]["binary_mtime"] = (
+                        os.path.getmtime(binary) if os.path.exists(binary) else None
+                    )
+
+        _save_db(BUILD_DIR, db)
 
         console.print(build_renderable(state))
         sys.exit(1 if any_failed else 0)
