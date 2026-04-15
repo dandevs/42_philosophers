@@ -15,6 +15,7 @@ Usage:
 
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -116,6 +117,54 @@ TESTS_DIR = os.path.join(PROJECT_ROOT, "tests")
 BUILD_DIR = os.path.join(PROJECT_ROOT, "test_build")
 
 
+def _normalize_suite_id(value):
+    return value.replace("\\", "/").strip("/")
+
+
+def _sanitize_target_fragment(value):
+    safe = []
+    for char in value:
+        if char.isalnum() or char in ("_", "-"):
+            safe.append(char)
+        else:
+            safe.append("_")
+    return "".join(safe) or "test"
+
+
+def _target_name_for_suite_test(suite, test_name):
+    suite_fragment = _sanitize_target_fragment(suite.replace("/", "__"))
+    test_fragment = _sanitize_target_fragment(test_name)
+    digest = hashlib.sha1(f"{suite}/{test_name}".encode("utf-8")).hexdigest()[:10]
+    return f"{suite_fragment}__{test_fragment}__{digest}"
+
+
+def _match_requested_suites(all_suites, requested):
+    matched = []
+    seen = set()
+    unknown = []
+
+    for raw in requested:
+        normalized = _normalize_suite_id(raw)
+        if not normalized:
+            unknown.append(raw)
+            continue
+        if normalized in all_suites:
+            candidates = [normalized]
+        else:
+            prefix = normalized + "/"
+            candidates = [suite for suite in all_suites if suite.startswith(prefix)]
+        if not candidates:
+            unknown.append(raw)
+            continue
+        for suite in candidates:
+            if suite in seen:
+                continue
+            matched.append(suite)
+            seen.add(suite)
+
+    return matched, unknown
+
+
 def get_project_sources():
     sources = []
     for path in glob.glob(os.path.join(SRC_DIR, "**", "*.c"), recursive=True):
@@ -126,15 +175,25 @@ def get_project_sources():
 
 def discover_suites():
     suites = []
-    for entry in sorted(os.listdir(TESTS_DIR)):
-        full = os.path.join(TESTS_DIR, entry)
-        if os.path.isdir(full):
-            suites.append(entry)
-    return suites
+    if not os.path.isdir(TESTS_DIR):
+        return suites
+
+    for root, _, files in os.walk(TESTS_DIR):
+        has_tests = any(name.endswith(".c") for name in files)
+        if not has_tests:
+            continue
+        rel_path = os.path.relpath(root, TESTS_DIR)
+        if rel_path == ".":
+            continue
+        normalized = _normalize_suite_id(rel_path)
+        if normalized:
+            suites.append(normalized)
+
+    return sorted(suites)
 
 
 def discover_tests(suite):
-    suite_dir = os.path.join(TESTS_DIR, suite)
+    suite_dir = os.path.join(TESTS_DIR, *suite.split("/"))
     return sorted(glob.glob(os.path.join(suite_dir, "*.c")))
 
 
@@ -516,11 +575,13 @@ def _print_help():
   {BOLD}--help{RESET}           Show this help message
 
 {CYAN}EXAMPLES{RESET}
-  python3 run_tests.py                        {DIM}# incremental build + run all{RESET}
-  python3 run_tests.py --clean                {DIM}# full rebuild{RESET}
-  python3 run_tests.py table_create           {DIM}# run a specific suite{RESET}
-  python3 run_tests.py --max-parallel 5       {DIM}# run tests in parallel{RESET}
-  python3 run_tests.py --disable-ccache       {DIM}# skip ccache{RESET}
+    python3 run_tests.py                        {DIM}# incremental build + run all{RESET}
+    python3 run_tests.py --clean                {DIM}# full rebuild{RESET}
+    python3 run_tests.py table_create           {DIM}# run a specific suite{RESET}
+    python3 run_tests.py foo_tests              {DIM}# run nested suites under foo_tests{RESET}
+    python3 run_tests.py foo_tests/a_tests      {DIM}# run one nested suite path{RESET}
+    python3 run_tests.py --max-parallel 5       {DIM}# run tests in parallel{RESET}
+    python3 run_tests.py --disable-ccache       {DIM}# skip ccache{RESET}
 """)
 
 
@@ -558,13 +619,13 @@ def main():
         if shutil.which("ccache") is None:
             use_ccache = False
 
-    suites = discover_suites()
+    all_suites = discover_suites()
+    suites = list(all_suites)
     if len(sys.argv) > 1:
         requested = sys.argv[1:]
-        suites = [s for s in suites if s in requested]
-        unknown = set(requested) - set(suites)
+        suites, unknown = _match_requested_suites(all_suites, requested)
         if unknown:
-            print(f"Unknown suites: {', '.join(unknown)}")
+            print(f"Unknown suites: {', '.join(sorted(set(unknown)))}")
             print(f"Available: {', '.join(discover_suites())}")
             sys.exit(1)
 
@@ -585,7 +646,8 @@ def main():
         tests = discover_tests(suite)
         for test_file in tests:
             test_name = os.path.splitext(os.path.basename(test_file))[0]
-            binary = os.path.join(BUILD_DIR, f"{suite}_{test_name}")
+            target_name = _target_name_for_suite_test(suite, test_name)
+            binary = os.path.join(BUILD_DIR, target_name)
             compile_jobs.append((suite, test_name, test_file, binary))
             test_id = os.path.basename(binary)
             binaries_by_id[test_id] = binary
