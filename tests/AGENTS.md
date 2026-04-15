@@ -55,37 +55,36 @@ tests/
 
 ## Compilation
 
-Project sources are compiled once into a static archive (`libproject.a`), then each test links against it:
+The test runner uses `make` for incremental builds. A Makefile is auto-generated in `test_build/` and only regenerated when the test manifest changes.
 
 ```
-# Once (shared):
-cc -O0 -Isrc/ -c src/utils.c -o obj/utils.o
-cc -O0 -Isrc/ -c src/table/table.c -o obj/table/table.o
-ar rcs libproject.a obj/utils.o obj/table/table.o
-
-# Per test:
-cc -O0 -Isrc/ test_file.c libproject.a -o binary
+# Auto-generated Makefile handles everything:
+make -C test_build -j4       # build library + all tests
+make -C test_build clean     # clean build artifacts
 ```
 
-- All `.c` files under `src/` are included **except** `src/main.c` (avoiding duplicate `main`).
-- Include path is `src/`, so use `#include "lib.h"` etc.
-- `ccache` is auto-detected and used if available.
-- If a test fails to compile, the runner reports `COMPILE FAIL` with compiler output.
+- Project sources compile once into `libproject.a`.
+- Each test links against the library.
+- `make` tracks dependencies via `-MMD -MP` flags — only changed files recompile.
+- `ccache` is auto-detected and passed via `CC="ccache cc"` in the Makefile.
+- Build directory (`test_build/`) is persistent between runs for incremental builds.
+- Use `--clean` for a full rebuild.
 
 ## Running Tests
 
 ```sh
-python3 run_tests.py                        # run all suites (auto-detects ccache)
+python3 run_tests.py                        # incremental build + run all tests
+python3 run_tests.py --clean                 # full rebuild from scratch
 python3 run_tests.py suite_name             # run one suite
 python3 run_tests.py suite_a suite_b        # run multiple suites
 python3 run_tests.py --disable-ccache       # force disable ccache
-python3 run_tests.py --max-parallel 1       # sequential execution
+python3 run_tests.py --max-parallel 1       # sequential execution (default)
 python3 run_tests.py --max-parallel 10      # up to 10 tests in parallel
 ```
 
-- Project sources compile once into a static library.
-- Test compilation runs in parallel across CPU cores.
-- Test execution runs in parallel (default: 5 concurrent, configurable via `--max-parallel`).
+- Incremental builds: only changed files are recompiled on subsequent runs.
+- `--clean`: runs `make clean` then rebuilds everything from scratch.
+- Test execution runs in parallel (default: 1, configurable via `--max-parallel`).
 - Each test has a 10-second timeout.
 - Runner exit code: `0` if all pass, `1` if any fail.
 - Requires the `rich` Python package (auto-installed if missing).
