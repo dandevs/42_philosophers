@@ -80,6 +80,9 @@ python3 run_tests.py suite_a suite_b        # run multiple suites
 python3 run_tests.py --disable-ccache       # force disable ccache
 python3 run_tests.py --max-parallel 1       # sequential execution (default)
 python3 run_tests.py --max-parallel 10      # up to 10 tests in parallel
+python3 run_tests.py --watch                # watch src/tests and rerun impacted tests
+python3 run_tests.py --watch --watch-no-initial  # watch without initial run
+python3 run_tests.py --watch --debounce-ms 500  # slower debounce window
 ```
 
 - Incremental builds: only changed files are recompiled on subsequent runs.
@@ -88,6 +91,7 @@ python3 run_tests.py --max-parallel 10      # up to 10 tests in parallel
 - Each test has a 10-second timeout.
 - Runner exit code: `0` if all pass, `1` if any fail.
 - Requires the `rich` Python package (auto-installed if missing).
+- Test suite names map to subdirectories under `tests/`, including nested paths like `suite/subsuite`.
 
 ## Output
 
@@ -115,4 +119,3 @@ No other setup required.
 - **Clean up resources.** Call destroy/free functions so the test doesn't leak. Leaks can mask real bugs.
 - **Test edge cases.** Cover 0, 1, 2, and large values explicitly.
 - **Don't print on success.** Silent = passing. Only print the failure reason when returning non-zero.
-- **Follow 42 Norm where practical.** No `for` loops, declarations at top of scope, functions ≤ 25 lines, no unused includes.

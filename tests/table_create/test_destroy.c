@@ -12,6 +12,6 @@ int	main(void)
 		printf("table_create returned 0\n");
 		return (1);
 	}
-	table_destroy(&table);
+	table_free(&table);
 	return (0);
 }

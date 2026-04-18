@@ -6,14 +6,14 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:43 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/15 15:54:46 by danimend         ###   ########.fr       */
+/*   Updated: 2026/04/18 05:02:27 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "lib.h"
 #include "table/table.h"
-#include "utils.h"
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 
 int	main(int argc, char **argv)
@@ -31,6 +31,18 @@ int	main(int argc, char **argv)
 	}
 	if (!table_create(&table, config.philosophers_count))
 		return (1);
-	table_destroy(&table);
+	table_free(&table);
+
+	while (1)
+	{
+		for (int i = 0; i < table.count; i++)
+		{
+
+		}
+
+		usleep(100);
+		printf("hi");
+	}
+
 	return (0);
 }

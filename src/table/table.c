@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/14 22:15:29 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/14 22:31:21 by danimend         ###   ########.fr       */
+/*   Updated: 2026/04/18 04:58:35 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -28,7 +28,7 @@ int	table_create(t_table *table, int count)
 	return (1);
 }
 
-void	table_destroy(t_table *table)
+void	table_free(t_table *table)
 {
 	free(table->philosophers);
 	free(table->forks);

@@ -1,147 +1,56 @@
-## Project Structure
+## Build
 
 ```
-42_philisophers/
-├── Makefile
-├── AGENTS.md
-└── src/
-    ├── lib.h          — Core types + argument parsing declarations
-    ├── main.c         — Entry point: parse args, create/destroy table
-    └── utils.c        — Argument validation and parsing (is_valid_number, parse_argument, parse_arguments)
-
-philo_bonus/ (not yet started)
-├── Makefile
-├── *_bonus.h
-└── *_bonus.c
+make          # build philo
+make debug    # build with -g -O0
+make fclean   # clean objects + executable
 ```
 
-### Source Files Detail
+- **CFLAGS strict flags are commented out** in Makefile (`-Wall -Wextra -Werror -pthread`). Uncomment before evaluation.
+- `-pthread` linker flag needed once threading code is added.
+- Sources auto-discovered: any `.c`/`.h` in `src/` subtree is compiled. Adding files to `src/table/` (or new subdirs) works with no Makefile changes.
 
-| File | Functions | Description |
-|------|-----------|-------------|
-| `src/lib.h` | — | Defines `t_fork` (pthread_mutex_t lock), `t_philosopher` (left/right fork pointers), `t_config` (philosophers_count, time_to_die/eat/sleep, meals_required), `t_table` (philosophers array, forks array, count), and forward declarations for argument parsing |
-| `src/main.c` | `main()` | Entry point: parse args, create/destroy table |
-| `src/utils.c` | `is_valid_number()`, `parse_argument()`, `parse_arguments()` | Validates positive integer strings, converts via atoi (TEMPORARY), populates t_config. No printf — error printing is in main.c |
+## Testing
 
-### Struct Layout
+Tests in `tests/`. Each test = standalone `.c` with its own `main`. Custom test runner builds via auto-generated `test_build/Makefile`. See `tests/AGENTS.md` for full guide.
 
-```
-t_fork:          pthread_mutex_t lock
-t_philosopher:   t_fork *fork_left, *fork_right
-t_config:        philosophers_count, time_to_die, time_to_eat, time_to_sleep, meals_required (-1 if unset)
-t_table:         *philosophers, *forks, count
-```
+- **Return**: `0` = pass, non-zero = fail
+- **Error output**: use `fprintf(stderr, "...")` (not `printf`) so the runner captures it correctly
+- **No print on success** — silent = passing
 
-### Current Implementation Status
+## 42 Constraints (not obvious from code)
 
-| Feature | Status |
-|---------|--------|
-| Argument parsing & validation | **Done** |
-| Struct definitions | **Skeleton** — missing many fields |
-| Table allocation + fork assignment (circular) | **Done** |
-| Mutex initialization (`pthread_mutex_init`) | **Missing** |
-| Thread creation (`pthread_create`) | **Missing** |
-| Philosopher routine (eat/sleep/think loop) | **Missing** |
-| Death detection / monitor thread | **Missing** |
-| Timestamp logging (`gettimeofday`) | **Missing** |
-| Print mutex (synchronized output) | **Missing** |
-| Meal counting + stop condition | **Missing** |
-| Single-philosopher edge case | **Missing** |
-| Thread joining + cleanup | **Missing** |
-| `atoi` removal (required before evaluation) | **TODO** |
+- **Norm**: max 25 lines/function, no `for` loops, variable declarations at top of scope. Norm errors fail evaluation even on working code. Use `while` loops, not `for`.
+- **No global variables**.
+- **Libft not authorized**. No external libraries.
+- **Allowed functions (mandatory)**: `memset`, `printf`, `malloc`, `free`, `write`, `usleep`, `gettimeofday`, `pthread_create`, `pthread_detach`, `pthread_join`, `pthread_mutex_init`, `pthread_mutex_destroy`, `pthread_mutex_lock`, `pthread_mutex_unlock`
+- **Allowed functions (bonus)**: all mandatory + `fork`, `kill`, `exit`, `waitpid`, `sem_open`, `sem_close`, `sem_post`, `sem_wait`, `sem_unlink`
+- Using anything outside these lists is a grading failure.
 
-### Known Issues / TODO
+## TEMPORARY — Remove Before Evaluation
 
-- `t_philosopher` is missing: `pthread_t` thread handle, `int id`, back-pointer to table/config, `last_meal_time`, `meals_eaten`, alive state, per-philosopher mutex
-- `t_table` is missing: `t_config`, `pthread_mutex_t print_mutex`, `start_time`, `int someone_died` flag, `pthread_t *threads` array
-- Fork assignment is symmetric (philosopher i → forks[i] left, forks[(i+1)%n] right) — needs asymmetric pickup order to avoid deadlock
-- `atoi` is used in `parse_argument()` — must be replaced with a custom implementation before evaluation
-- Error printf is in `main.c`, not in `utils.c` (parse_arguments returns 0 on error, main prints)
+`atoi()` in `src/utils.c:parse_argument()` must be replaced with a custom implementation.
 
----
+## Current Implementation Status
 
-## Common Instructions
+**Done:** Argument parsing & validation, struct skeletons, table allocation + circular fork assignment.
+**Not started:** Mutex init, thread creation, philosopher routine, monitor thread, timestamp logging, print mutex, meal counting, single-philosopher edge case, thread joining + cleanup.
 
-### Language & Standards
-- **Language**: C
-- **Compliance**: Must follow 42 Norm
-- **Compiler**: cc with flags `-Wall`, `-Wextra`, `-Werror`
-- **Libft**: Not authorized for this project
+**Struct fields still needed:**
+- `t_philosopher` (currently only `fork_left`/`fork_right`): add `pthread_t thread`, `int id`, back-pointer to table, `unsigned long last_meal_time`, `int meals_eaten`, `pthread_mutex_t meal_mutex`
+- `t_table` (currently only `philosophers`/`forks`/`count`): add `t_config`, `pthread_mutex_t print_mutex`, `pthread_mutex_t death_mutex`, `unsigned long start_time`, `int someone_died`
 
-### Stability Requirements
-- No unexpected quits (segfault, bus error, double free, etc.)
-- All heap-allocated memory must be properly freed
-- No memory leaks tolerated
+**Fork assignment** is symmetric (philo i → forks[i] left, forks[(i+1)%n] right) — needs asymmetric pickup order to avoid deadlock (see gotchas below).
 
-### Makefile Requirements
-Mandatory rules:
-- `$(NAME)` - builds the executable
-- `all` - default target
-- `clean` - remove object files
-- `fclean` - remove object files and executable
-- `re` - fclean + all
-
-For bonus:
-- `bonus` rule - builds bonus executable
-- Bonus files named `*_bonus.{c/h}`
-
-### External Functions Allowed (Mandatory)
-- `memset`, `printf`, `malloc`, `free`, `write`
-- `usleep`, `gettimeofday`
-- `pthread_create`, `pthread_detach`, `pthread_join`
-- `pthread_mutex_init`, `pthread_mutex_destroy`, `pthread_mutex_lock`, `pthread_mutex_unlock`
-
-### External Functions Allowed (Bonus)
-- All mandatory functions
-- `fork`, `kill`, `exit`, `waitpid`
-- `sem_open`, `sem_close`, `sem_post`, `sem_wait`, `sem_unlink`
-
-### (DANGEROUS) TEMPORARY FUNCTIONS
-Remove these before evaluation!
-- `atoi`
-
----
-
-## Problem Overview
-
-The Dining Philosophers Problem is a classic synchronization problem:
-
-- Philosophers sit at a round table with a bowl of spaghetti
-- Each philosopher cycles through: **eating → sleeping → thinking**
-- Number of forks equals number of philosophers
-- A philosopher needs **two forks** (left and right) to eat
-- Simulation ends when a philosopher dies of starvation
-
-### Key Constraints
-- Philosophers don't communicate with each other
-- Philosophers don't know if others are about to die
-- No global variables allowed
-- Must avoid data races
-
----
-
-## Global Rules
+## Program Specification
 
 ### Arguments
 ```
 ./philo number_of_philosophers time_to_die time_to_eat time_to_sleep [number_of_times_each_philosopher_must_eat]
 ```
+All values in milliseconds. Optional 5th arg: stop when all philosophers eat N times. `meals_required = -1` when unset.
 
-| Argument | Description |
-|----------|-------------|
-| `number_of_philosophers` | Number of philosophers AND forks |
-| `time_to_die` (ms) | Max time without eating before death |
-| `time_to_eat` (ms) | Time spent eating (holding two forks) |
-| `time_to_sleep` (ms) | Time spent sleeping |
-| `number_of_times_each_philosopher_must_eat` (optional) | Stop when all philosophers eat this many times |
-
-### Seating Arrangement
-- Philosophers numbered 1 to N
-- Philosopher 1 sits next to philosopher N
-- Philosopher N sits between N-1 and N+1
-
-### Log Format
-All state changes must be logged with timestamps:
+### Log Format (exact, timestamps in ms relative to sim start)
 ```
 timestamp_in_ms X has taken a fork
 timestamp_in_ms X is eating
@@ -149,157 +58,46 @@ timestamp_in_ms X is sleeping
 timestamp_in_ms X is thinking
 timestamp_in_ms X died
 ```
+X = philosopher number (1-indexed). No overlapping messages. Death announcement within 10ms of actual death.
 
-### Log Requirements
-- No overlapping messages
-- Death announcement within 10ms of actual death
-- Timestamps in milliseconds
-- X = philosopher number (1-indexed)
+### Mandatory vs Bonus
+- **Mandatory**: threads + mutexes. Executable: `philo`.
+- **Bonus**: processes + semaphores. Executable: `philo_bonus`, files named `*_bonus.{c/h}`. Only evaluated if mandatory is perfect.
+- Single philosopher (1 fork): can't eat, must die. Handle without threads.
 
----
-
-## Mandatory Part
-
-### Implementation Requirements
-- Each philosopher = separate **thread**
-- One fork between each pair of philosophers
-- Each fork's state protected by a **mutex**
-- Single philosopher has access to only one fork (will die)
-
-### Program Name
-`philo`
-
----
-
-## Bonus Part
-
-### Implementation Requirements
-- All forks in the middle of the table
-- Fork availability represented by a **semaphore**
-- Each philosopher = separate **process**
-- Main process does NOT act as a philosopher
-
-### Program Name
-`philo_bonus`
-
-### Important Note
-Bonus is only evaluated if mandatory part is PERFECT (all requirements met, no malfunctions).
-
----
-
-## README Requirements
-
-Must include at least:
-
-1. **First line** (italicized): *This project has been created as part of the 42 curriculum by <login1>[, <login2>[, ...]].*
-
-2. **Description**: Project goal and brief overview
-
-3. **Instructions**: Compilation, installation, execution
-
-4. **Resources**: 
-   - Classic references (documentation, articles, tutorials)
-   - AI usage description (which tasks, which parts)
-
-Additional sections may include: usage examples, feature list, technical choices.
-
-Language: English
-
----
-
-## Submission & Evaluation
-
-### Directories
-- Mandatory: `philo/`
-- Bonus: `philo_bonus/`
-
-### Evaluation Notes
-- Only work in Git repository will be evaluated
-- Brief modifications may be requested during evaluation
-- Modifications test understanding of specific parts
-- Must be feasible within a few minutes
-
----
-
-## Key Technical Considerations
-
-### Synchronization
-- Prevent race conditions when accessing shared data
-- Avoid deadlocks (especially with fork pickup order)
-- Ensure proper mutex/lock ordering
+## Critical Gotchas
 
 ### Timing
-- Use `gettimeofday()` for accurate timestamps
-- Handle `usleep()` granularity issues
-- Death must be detected within 10ms
+- `usleep()` overshoots by ms. Use polling loop (`usleep(500)` + time check) instead of one long sleep.
+- Death detection must be within 10ms. Monitor loop checks every ~0.5ms.
+- `gettimeofday()` returns µs, args are ms. Convert: `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
+- Record `start_time` BEFORE launching threads. Set each philosopher's `last_meal_time = start_time` before their thread starts (thread creation is not instantaneous — early threads run before late ones are created).
 
-### Edge Cases
-- Single philosopher (will die)
-- Very short times (approaching zero)
-- Large number of philosophers
-- Optional meal count reached
+### Deadlock Prevention
+- Symmetric left→right pickup causes circular wait. Use even/odd asymmetric ordering: even IDs grab left first, odd IDs grab right first.
+- Stagger start: even-numbered philosophers `usleep(1000)` before first action.
+- Single philosopher: no threads needed — just print "taken fork", sleep `time_to_die`, print "died".
 
----
+### Race Conditions
+- `meals_eaten` and `last_meal_time` need per-philosopher mutex — monitor reads them while philosopher writes.
+- `someone_died` flag needs its own mutex. Unprotected int read/write is undefined behavior in C.
+- `printf` is not atomic — protect all output with a print mutex.
+- Death message is the exception: must print even after `someone_died` is set (the dying philosopher sets the flag then prints).
 
-## Common Pitfalls
+### Cleanup Order
+- `pthread_join` ALL threads before destroying any mutex.
+- Every `pthread_mutex_init` must have matching `pthread_mutex_destroy`.
+- Bonus: `sem_unlink` before `sem_open` (stale semaphores in `/dev/shm/`), `waitpid` all children.
 
-1. **Data races** - All shared state must be protected
-2. **Deadlocks** - Implement consistent fork pickup order
-3. **Timing precision** - Death detection must be accurate
-4. **Memory leaks** - Clean up all resources on exit
-5. **Message overlap** - Protect printf calls with mutex
-6. **Philosopher starvation** - Ensure fair fork access
+### Key Evaluator Test Cases
+```
+./philo 1 800 200 200          # dies, one "taken fork" + death msg
+./philo 4 310 200 100          # dies (time_to_die < eat + sleep)
+./philo 5 800 200 200 5        # all eat exactly 5 times, clean stop
+./philo 200 800 200 200        # stress: no deadlock, no crash
+```
 
----
+## Reference Docs
 
-## Gotchas & Pitfalls (from 42 student experience)
-
-### Timing & Precision
-
-- **`usleep()` is not precise.** `usleep(200000)` may wake up at 205ms or later. The OS scheduler doesn't guarantee exact wake-up. Use a polling loop (check + short `usleep(500)`) instead of one long sleep when precision matters.
-- **Death detection must be within 10ms.** If your monitor loop checks every 10ms, you're already at the limit. Check every ~0.5ms (500μs). This is the #1 reason projects fail evaluation.
-- **`gettimeofday()` returns microseconds, arguments are in milliseconds.** Mixing these up causes off-by-1000x bugs. Always convert: `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
-- **Timestamps must be relative to simulation start**, not epoch time. Compute once at start, subtract on every print.
-
-### Thread Start Synchronization
-
-- **All philosophers must not start eating at the exact same instant.** Without staggering, every philosopher grabs their left fork simultaneously → instant deadlock with odd-count tables. Use a small initial delay for even-numbered philosophers (`usleep(1000)`).
-- **`start_time` must be recorded BEFORE launching threads**, and every philosopher's `last_meal_time` initialized to `start_time`. If you record start time after thread creation, philosophers may already be running and calculating wrong death times.
-- **Thread creation is not instantaneous.** By the time `pthread_create` returns for philosopher 5, philosopher 1 may have already been running for milliseconds. This asymmetry can cause false deaths if `last_meal_time` isn't properly initialized.
-
-### Death & Termination
-
-- **A philosopher who dies during `usleep` must still be detected.** If you use raw `usleep()` for eating/sleeping, the death won't be caught until the sleep finishes — which may be way past the 10ms deadline. The monitor thread solves this, but only if philosopher sleeps are polling-based so they can exit early.
-- **The death message must still print even after `someone_died` is set.** The philosopher that triggers death sets the flag, but its own print must go through. A common bug: checking `is_dead()` before printing causes the dying philosopher's own death message to be suppressed.
-- **Only one death message allowed.** If two philosophers die nearly simultaneously, only the first one should print. Protect the death check-and-print with a mutex so the second one sees `someone_died == 1` and stays silent.
-- **Philosophers must stop their routine after death is detected**, not just the monitor. If `someone_died` is set but philosopher threads keep looping, they may try to lock/unlock mutexes during cleanup → undefined behavior.
-
-### Fork Pickup & Deadlocks
-
-- **Symmetric pickup order causes deadlock.** If every philosopher always grabs left fork first, right fork second → circular wait. Even/odd asymmetric ordering or always locking the lower-indexed fork first breaks the cycle.
-- **Holding one fork while waiting for the other can starve neighbors.** A philosopher holding its left fork and blocking on the right fork prevents its left neighbor from eating. Minimize the window between first and second fork acquisition.
-- **Single philosopher edge case.** With 1 philosopher and 1 fork, the philosopher can never eat. Must die after `time_to_die` ms. Handle this as a special case before threading — don't create threads at all.
-- **2 philosophers, 2 forks.** Both compete for the same pair. Without stagger start or asymmetric ordering, one will starve. Test this case explicitly.
-
-### Race Conditions (Non-Obvious)
-
-- **`meals_eaten++` and `last_meal_time = get_time_ms()` are NOT atomic.** The monitor reads these while the philosopher writes them. Without a per-philosopher mutex, the monitor can read a half-written value (torn read).
-- **The `someone_died` flag needs a mutex too.** It's written by the monitor and read by every philosopher on every loop iteration. An unprotected `int` read/write is technically a data race even on single-core systems (C standard says it's undefined behavior).
-- **`printf` is not atomic.** Two threads calling `printf` at the same time can produce interleaved characters. The output "100 2 is ea100 3 is sleepingting\n" is a real possibility. Protect with a print mutex.
-- **Don't check `someone_died` then act — check and act atomically.** The TOCTOU (time-of-check-to-time-of-use) gap between checking `is_dead()` and locking a fork means a death might have occurred in between.
-
-### Cleanup & Resource Leaks
-
-- **Every `pthread_mutex_init` must have a matching `pthread_mutex_destroy`.** Forgetting to destroy even one mutex is a leak. Track them systematically (e.g., destroy in reverse order of creation).
-- **`pthread_join` all threads before destroying mutexes.** If you destroy a mutex while a thread is still running and trying to lock it, you get undefined behavior. Join everything first, then destroy.
-- **Named semaphores persist after process exit (bonus).** They live in `/dev/shm/` on Linux. If your program crashes without calling `sem_unlink`, stale semaphores remain and cause "semaphore already exists" errors on next run. Always clean up at start too: call `sem_unlink` before `sem_open`.
-- **Child processes must be reaped (bonus).** Every `fork()` needs a matching `waitpid()`. Unreaped children become zombies. If the parent exits first, children become orphans adopted by init — still running and holding semaphore references.
-
-### Evaluation-Specific
-
-- **Evaluators will test `./philo 1 800 200 200`** — must die, must print one "taken fork" then death. No threads needed for this case.
-- **Evaluators will test impossible timing** — `./philo 4 310 200 100` (time_to_die < time_to_eat + time_to_sleep). Someone must die.
-- **Evaluators will test `./philo 5 800 200 200 5`** and verify all 5 philosophers eat exactly 5 times before the simulation stops cleanly.
-- **Evaluators will run with 200 philosophers** — must not deadlock, must not crash. Stress tests reveal race conditions that don't appear with 5 philosophers.
-- **Evaluators may request live modifications during evaluation** — you must understand every line of your code. Be prepared to change the death check interval or fork pickup order on the spot.
-- **42 Norm compliance is checked.** Functions >25 lines, variable declarations at top of scope, no `for` loops — all the usual rules. Norm errors on a working project can still cause a failing grade.
+- `FUNCTIONS.md` — API reference for all allowed functions with implementation patterns and code examples
+- `tests/AGENTS.md` — test writing guide
