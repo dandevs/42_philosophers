@@ -53,62 +53,11 @@ tests/
 - Every `.c` file inside a suite directory is a standalone test.
 - The runner discovers suites and tests automatically — no registration needed.
 
-## Compilation
-
-The test runner uses `make` for incremental builds. A Makefile is auto-generated in `test_build/` and only regenerated when the test manifest changes.
-
-```
-# Auto-generated Makefile handles everything:
-make -C test_build -j4       # build library + all tests
-make -C test_build clean     # clean build artifacts
-```
-
-- Project sources compile once into `libproject.a`.
-- Each test links against the library.
-- `make` tracks dependencies via `-MMD -MP` flags — only changed files recompile.
-- `ccache` is auto-detected and passed via `CC="ccache cc"` in the Makefile.
-- Build directory (`test_build/`) is persistent between runs for incremental builds.
-- Use `--clean` for a full rebuild.
-
-## Running Tests
-
-```sh
-python3 run_tests.py                        # incremental build + run all tests
-python3 run_tests.py --clean                 # full rebuild from scratch
-python3 run_tests.py suite_name             # run one suite
-python3 run_tests.py suite_a suite_b        # run multiple suites
-python3 run_tests.py --disable-ccache       # force disable ccache
-python3 run_tests.py --max-parallel 1       # sequential execution (default)
-python3 run_tests.py --max-parallel 10      # up to 10 tests in parallel
-python3 run_tests.py --watch                # watch src/tests and rerun impacted tests
-python3 run_tests.py --watch --watch-no-initial  # watch without initial run
-python3 run_tests.py --watch --debounce-ms 500  # slower debounce window
-```
-
-- Incremental builds: only changed files are recompiled on subsequent runs.
-- `--clean`: runs `make clean` then rebuilds everything from scratch.
-- Test execution runs in parallel (default: 1, configurable via `--max-parallel`).
-- Each test has a 10-second timeout.
-- Runner exit code: `0` if all pass, `1` if any fail.
-- Requires the `rich` Python package (auto-installed if missing).
-- Test suite names map to subdirectories under `tests/`, including nested paths like `suite/subsuite`.
-
-## Output
-
-| Symbol | Meaning | Color |
-|--------|---------|-------|
-| `⠋ test_name` | Test running (animated spinner) | Yellow |
-| `✓ test_name  [Nms]` | Test passed | Green |
-| `✗ test_name  [Nms]` | Test failed; stdout shown with `→` prefix | Red |
-| `✗ test_name  COMPILE FAIL` | Compilation failed; compiler errors shown | Red |
-| `✗ test_name  SEGFAULT` | Crashed (signal 11 / exit 139) | Red |
-| `✗ test_name  TIMEOUT` | Exceeded 10s limit | Yellow |
-
 ## Adding a New Suite
 
 1. Create a directory under `tests/`: `mkdir tests/my_feature`
 2. Add one or more `.c` test files: `tests/my_feature/test_basic.c`
-3. Run: `python3 run_tests.py my_feature`
+3. Run: `ctester`
 
 No other setup required.
 
