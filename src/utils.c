@@ -1,16 +1,27 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   utils.c                                            :,      :,             */
-/*                                                    :,     ,+;,             */
-/*   By: danimend <danimend@student.42.fr>          ,+;:,   ,+;:;,             */
-/*                                                ,+;;+:   ,+;;+;,            */
-/*   Updated: 2026/04/14 05:20:00 by danimend         ;+;;;;;;;;'              */
+/*   utils.c                                            :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2026/04/19 00:14:39 by danimend          #+#    #+#             */
+/*   Updated: 2026/04/19 06:56:41 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
+
 #include "lib.h"
 #include <stdlib.h>
+#include <sys/time.h>
+
+unsigned long	get_time_ms(void)
+{
+	struct timeval	tv;
+
+	gettimeofday(&tv, NULL);
+	return (tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
 
 int	is_valid_number(char *str)
 {
@@ -38,6 +49,19 @@ int	parse_argument(char *str, int *value)
 	return (1);
 }
 
+static int validate_arguments(t_config *config)
+{
+	if (config->philosophers_count <= 0)
+		return (0);
+	if (config->time_to_die <= 0 || config->time_to_eat <= 0)
+		return (0);
+	if (config->time_to_sleep <= 0)
+		return (0);
+	if (config->meals_required != -1 && config->meals_required <= 0)
+		return (0);
+	return (1);
+}
+
 int	parse_arguments(int argc, char **argv, t_config *config)
 {
 	if (argc != 5 && argc != 6)
@@ -57,5 +81,31 @@ int	parse_arguments(int argc, char **argv, t_config *config)
 	}
 	else
 		config->meals_required = -1;
+	return (1);
+}
+
+void	for_each(void *arr, int len, void (*func)(void *elem)) 
+{
+	int	i;
+
+	i = 0;
+	while (i < len) 
+	{
+		func((void *)((char *)arr + i * sizeof(void *)));
+		i++;
+	}
+}
+
+int		all(void *arr, int len, int (*predicate)(void *elem))
+{
+	int	i;
+
+	i = 0;
+	while (i < len) 
+	{
+		if (!predicate((void *)((char *)arr + i * sizeof(void *))))
+			return (0);
+		i++;
+	}
 	return (1);
 }

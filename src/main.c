@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:43 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/18 05:02:27 by danimend         ###   ########.fr       */
+/*   Updated: 2026/04/19 17:34:27 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -37,11 +37,10 @@ int	main(int argc, char **argv)
 	{
 		for (int i = 0; i < table.count; i++)
 		{
-
+			
 		}
 
 		usleep(100);
-		printf("hi");
 	}
 
 	return (0);

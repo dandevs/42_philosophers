@@ -15,30 +15,18 @@ int	main(void)
 	count = 200;
 	n_checks = 5;
 	if (!table_create(&table, count))
-	{
-		fprintf(stderr, "table_create returned 0\n");
-		return (1);
-	}
+		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.count != count)
-	{
-		fprintf(stderr, "expected count %d, got %d\n", count, table.count);
-		return (1);
-	}
+		return (fprintf(stderr, "expected count %d, got %d\n", count, table.count), 1);
 	i = 0;
 	while (i < n_checks)
 	{
 		idx = spot_checks[i];
 		if (table.philosophers[idx].fork_left != &table.forks[idx])
-		{
-			fprintf(stderr, "philo[%d].fork_left wrong\n", idx);
-			return (1);
-		}
+			return (fprintf(stderr, "philo[%d].fork_left wrong\n", idx), 1);
 		if (table.philosophers[idx].fork_right
 			!= &table.forks[(idx + 1) % count])
-		{
-			fprintf(stderr, "philo[%d].fork_right wrong\n", idx);
-			return (1);
-		}
+			return (fprintf(stderr, "philo[%d].fork_right wrong\n", idx), 1);
 		i++;
 	}
 	table_free(&table);
