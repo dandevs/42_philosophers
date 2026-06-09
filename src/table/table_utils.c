@@ -1,12 +1,12 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   table_utils.c                                      :+:      :+:    :+:   */
+/*   table_utils.c     a                                 :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/19 05:45:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/19 19:21:27 by danimend         ###   ########.fr       */
+/*   Updated: 2026/04/22 09:15:58 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -33,13 +33,15 @@ int	table_create(t_table *table, int count)
 		table->philosophers[i].table = table;
 		table->philosophers[i].fork_left = &table->forks[i];
 		table->philosophers[i].fork_right = &table->forks[(i + 1) % count];
+		table->philosophers[i].has_fork_left = 0;
+		table->philosophers[i].has_fork_right = 0;
 		pthread_mutex_init(&table->forks[i].mutex, NULL);
 		pthread_mutex_init(&table->philosophers[i].mutex, NULL);
 		i++;
 	}
 
 	i = 0;
-	while (i < count)
+	while (i < table->count)
 	{
 		if (pthread_create(&table->philosophers[i].thread, NULL,
 			philo_main_routine, &table->philosophers[i]) != 0)

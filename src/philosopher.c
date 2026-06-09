@@ -11,6 +11,7 @@
 /* ************************************************************************** */
 
 #include "lib.h"
+#include "philosopher/utils.h"
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -20,35 +21,57 @@ void	*philo_main_routine(void *arg)
 	t_philosopher	*philo;
 	t_table			*table;
 	t_config		*config;
+	int				state;
 
 	philo = (t_philosopher *)arg;
 	table = philo->table;
 	config = table->config;
-	while (1)
+	state = PHILO_STATE_GET_FORKS;
+
+	while (philo->alive)
 	{
-		pthread_mutex_lock(&philo->fork_left->mutex);
-		pthread_mutex_lock(&philo->fork_right->mutex);
-
-		pthread_mutex_lock(&philo->mutex);
-		if (philo->alive)
+		philo_lock(philo);
+		if (get_time_ms() >= philo->time_last_meal + config->time_to_die)
 		{
-			pthread_mutex_lock(&table->printf_mutex);
-			printf("Philosopher %d is eating\n", philo->index);
-			pthread_mutex_unlock(&table->printf_mutex);
+			philo->alive = 0;
+			philo_unlock(philo);
+			break ;
 		}
-		pthread_mutex_unlock(&philo->mutex);
 
-		pthread_mutex_unlock(&philo->fork_left->mutex);
-		pthread_mutex_unlock(&philo->fork_right->mutex);
+		if (state == PHILO_STATE_GET_FORKS)
+		{
+			if (!philo->has_fork_left && philo->fork_left->available)
+				take_left_fork(philo);
+			if (!philo->has_fork_right && philo->fork_right->available)
+				take_right_fork(philo);
 
-		pthread_mutex_lock(&philo->mutex);
-		philo->time_last_meal = get_time_ms();
-		pthread_mutex_unlock(&philo->mutex);
+			if (philo->has_fork_left && philo->has_fork_right)
+			{
+				philo->time_began_eating = get_time_ms();
+				state = PHILO_STATE_EAT;
+			}
+		}
 
-		pthread_mutex_lock(&philo->mutex);
-		if (philo->alive)
-			usleep(config->time_to_sleep * 1000);
-		pthread_mutex_unlock(&philo->mutex);
+		if (state == PHILO_STATE_EAT)
+		{
+			if (get_time_ms() >= philo->time_began_eating + config->time_to_eat)
+			{
+				release_both_forks(philo);
+				state = PHILO_STATE_SLEEP;
+			}
+		}
+
+		if (state == PHILO_STATE_SLEEP)
+		{
+			if (get_time_ms() >= philo->time_began_sleep + config->time_to_sleep)
+			{
+				philo->time_last_meal = get_time_ms();
+				state = PHILO_STATE_GET_FORKS;
+			}
+		}
+
+		philo_unlock(philo);
+		usleep(POLLING_RATE);
 	}
 
 	return (NULL);
