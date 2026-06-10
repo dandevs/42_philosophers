@@ -24,6 +24,7 @@ int	table_create(t_table *table, int count)
 	if (!table->philosophers || !table->forks)
 		return (free(table->philosophers), free(table->forks), 0);
 	table->count = count;
+	table->threads_created = 0;
 	pthread_mutex_init(&table->printf_mutex, NULL);
 	pthread_mutex_init(&table->mutex, NULL);
 	i = 0;
@@ -56,21 +57,21 @@ int	table_start_philos(t_table *table)
 		if (pthread_create(&table->philosophers[i].thread, NULL,
 			philo_main_routine, &table->philosophers[i]) != 0)
 		{
+			table->threads_created = i;
 			return (1);
 		}
 		i++;
 	}
-	return (1);
+	table->threads_created = i;
+	return (table->threads_created);
 }
 
 void	table_free(t_table *table)
 {
 	int	i;
-	int j;
 
 	i = 0;
-	j = 0;
-	while (i < table->count)
+	while (i < table->threads_created)
 	{
 		pthread_join(table->philosophers[i].thread, NULL);
 		i++;

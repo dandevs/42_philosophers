@@ -59,7 +59,8 @@ typedef struct s_table
 	pthread_mutex_t	mutex;
 	int				count;
 	int				alive;
-}	t_table;
+	int				threads_created;
+} t_table;
 
 unsigned long	get_time_ms(void);
 int				is_valid_number(char *str);
