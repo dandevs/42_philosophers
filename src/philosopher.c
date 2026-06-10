@@ -28,22 +28,25 @@ void	*philo_main_routine(void *arg)
 	config = table->config;
 	state = PHILO_STATE_GET_FORKS;
 
-	while (philo->alive)
+			// printf("philo an table alive?";
+	while (philo->alive && table->alive)
 	{
-		philo_lock(philo);
+		mutex_philo_lock(philo);
 		if (get_time_ms() >= philo->time_last_meal + config->time_to_die)
 		{
 			philo->alive = 0;
-			philo_unlock(philo);
+			mutex_philo_release(philo);
 			break ;
 		}
 
 		if (state == PHILO_STATE_GET_FORKS)
 		{
+			mutex_forks_lock(philo);
 			if (!philo->has_fork_left && philo->fork_left->available)
 				take_left_fork(philo);
 			if (!philo->has_fork_right && philo->fork_right->available)
 				take_right_fork(philo);
+			mutex_forks_release(philo);
 
 			if (philo->has_fork_left && philo->has_fork_right)
 			{
@@ -70,7 +73,7 @@ void	*philo_main_routine(void *arg)
 			}
 		}
 
-		philo_unlock(philo);
+		mutex_philo_release(philo);
 		usleep(POLLING_RATE);
 	}
 

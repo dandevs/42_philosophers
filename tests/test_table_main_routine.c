@@ -11,7 +11,7 @@ int main(void)
 		.meals_required = 5,
 		.philosophers_count = 3,
 		.time_to_die = 1000,
-		.time_to_eat = 200,
+		.time_to_eat = 20000,
 		.time_to_sleep = 300
 	};
 
@@ -19,6 +19,5 @@ int main(void)
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 
 	table_main_routine(&table, &config);
-	table_free(&table);
 	return (0);
 }

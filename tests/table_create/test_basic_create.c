@@ -2,12 +2,17 @@
 #include "table/table.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <string.h>
 
 int	main(void)
 {
 	t_table	table;
 	int		count;
 	int		i;
+	char *mystr;
+
+	printf("Testing basic table_create...\n");
 
 	count = 5;
 	if (!table_create(&table, count))

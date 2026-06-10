@@ -35,10 +35,20 @@ int	table_create(t_table *table, int count)
 		table->philosophers[i].fork_right = &table->forks[(i + 1) % count];
 		table->philosophers[i].has_fork_left = 0;
 		table->philosophers[i].has_fork_right = 0;
+		table->philosophers[i].time_last_meal = get_time_ms();
+		table->philosophers[i].alive = 1;
 		pthread_mutex_init(&table->forks[i].mutex, NULL);
 		pthread_mutex_init(&table->philosophers[i].mutex, NULL);
 		i++;
 	}
+
+	// return (table_start_philos(table));
+	return (1);
+}
+
+int	table_start_philos(t_table *table)
+{
+	int	i;
 
 	i = 0;
 	while (i < table->count)
@@ -56,15 +66,18 @@ int	table_create(t_table *table, int count)
 void	table_free(t_table *table)
 {
 	int	i;
+	int j;
 
 	i = 0;
+	j = 0;
 	while (i < table->count)
 	{
-		pthread_mutex_destroy(&table->forks[i].mutex);
-		pthread_mutex_destroy(&table->philosophers[i].mutex);
+		pthread_join(table->philosophers[i].thread, NULL);
 		i++;
 	}
-	pthread_mutex_destroy(&table->printf_mutex);
-	free(table->philosophers);
-	free(table->forks);
+
+	// free(table->philosophers);
+	// free(table);
+	// free(table->philosophers);
+	// free(table->forks);
 }

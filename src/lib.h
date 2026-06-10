@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:10 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/19 19:21:24 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/09 13:41:18 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,6 +20,7 @@
 typedef struct s_fork
 {
 	pthread_mutex_t	mutex;
+	int				available;
 }	t_fork;
 
 typedef struct s_table	t_table;
@@ -36,6 +37,8 @@ typedef struct s_philosopher
 	int				has_fork_right;
 	int				alive;
 	unsigned long	time_last_meal;
+	unsigned long	time_began_eating;
+	unsigned long	time_began_sleep;
 }	t_philosopher;
 
 typedef struct s_config
