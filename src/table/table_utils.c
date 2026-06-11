@@ -14,13 +14,14 @@
 #include "lib.h"
 #include <stdlib.h>
 
-int	table_create(t_table *table, int count)
+int	table_create(t_table *table, t_config config, int count)
 {
 	int	i;
 
 	table->philosophers = malloc(sizeof(t_philosopher) * count);
 	table->forks = malloc(sizeof(t_fork) * count);
 	table->alive = 1;
+	table->config = config;
 	if (!table->philosophers || !table->forks)
 		return (free(table->philosophers), free(table->forks), 0);
 	table->count = count;

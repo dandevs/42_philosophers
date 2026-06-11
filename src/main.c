@@ -29,7 +29,7 @@ int	main(int argc, char **argv)
 			"[number_of_times_each_philosopher_must_eat]\n", argv[0]);
 		return (1);
 	}
-	if (!table_create(&table, config.philosophers_count))
+	if (!table_create(&table, config, config.philosophers_count))
 		return (1);
 	table_free(&table);
 

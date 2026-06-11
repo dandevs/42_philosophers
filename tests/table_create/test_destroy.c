@@ -6,8 +6,10 @@
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 
-	if (!table_create(&table, 5))
+	config = (t_config){0};
+	if (!table_create(&table, config, 5))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	table_free(&table);
 	return (0);

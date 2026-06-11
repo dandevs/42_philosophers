@@ -17,8 +17,10 @@ Each test is a single `.c` file with its own `main`:
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 
-	if (!table_create(&table, 5))
+	config = (t_config){0};
+	if (!table_create(&table, config, 5))
 	{
 		printf("table_create returned 0");
 		return (1);

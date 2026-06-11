@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:10 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/09 13:41:18 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/11 15:51:14 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -54,13 +54,13 @@ typedef struct s_table
 {
 	t_philosopher	*philosophers;
 	t_fork			*forks;
-	t_config		*config;
+	t_config		config;
 	pthread_mutex_t	printf_mutex;
 	pthread_mutex_t	mutex;
 	int				count;
 	int				alive;
 	int				threads_created;
-} t_table;
+}	t_table;
 
 unsigned long	get_time_ms(void);
 int				is_valid_number(char *str);

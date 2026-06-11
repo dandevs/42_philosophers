@@ -15,9 +15,9 @@ int main(void)
 		.time_to_sleep = 300
 	};
 
-	if (!table_create(&table, 1))
+	if (!table_create(&table, config, 1))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 
-	table_main_routine(&table, &config);
+	table_main_routine(&table);
 	return (0);
 }

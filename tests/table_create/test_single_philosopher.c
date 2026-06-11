@@ -6,8 +6,10 @@
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 
-	if (!table_create(&table, 1))
+	config = (t_config){0};
+	if (!table_create(&table, config, 1))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.count != 1)
 		return (fprintf(stderr, "expected count 1, got %d\n", table.count), 1);

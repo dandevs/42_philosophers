@@ -7,8 +7,10 @@
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 
-	if (!table_create(&table, 2))
+	config = (t_config){0};
+	if (!table_create(&table, config, 2))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.philosophers[0].fork_left != &table.forks[0]
 		|| table.philosophers[0].fork_right != &table.forks[1])

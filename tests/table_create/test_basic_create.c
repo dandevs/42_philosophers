@@ -8,6 +8,7 @@
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 	int		count;
 	int		i;
 	char *mystr;
@@ -15,7 +16,8 @@ int	main(void)
 	printf("Testing basic table_create...\n");
 
 	count = 5;
-	if (!table_create(&table, count))
+	config = (t_config){0};
+	if (!table_create(&table, config, count))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.count != count)
 		return (fprintf(stderr, "expected count %d, got %d\n", count, table.count), 1);

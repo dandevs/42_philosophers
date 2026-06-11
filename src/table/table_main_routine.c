@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/14 22:15:29 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/10 03:50:02 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/11 16:06:24 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -35,10 +35,11 @@ void mark_all_philo_unalive(t_table *table)
 	}
 }
 
-void	table_main_routine(t_table *table, t_config *config)
+void	table_main_routine(t_table *table)
 {
 	int i;
 
+	table_start_philos(table);
 	while (table->alive)
 	{
 		i = 0;
@@ -50,7 +51,7 @@ void	table_main_routine(t_table *table, t_config *config)
 			pthread_mutex_lock(&table->mutex);
 			unsigned long	elapsed = get_time_ms() - philo.time_last_meal;
 
-			if (philo.alive && elapsed > config->time_to_die)
+			if (philo.alive && elapsed > table->config.time_to_die)
 			{
 				table->alive = 0;
 				break;
@@ -63,10 +64,7 @@ void	table_main_routine(t_table *table, t_config *config)
 
 		usleep(POLLING_RATE);
 	}
-	// printf("Done\n");
 
 	if (!table->alive)
 		printf("A philosopher has died. Ending simulation.\n");
-
-	// mark_all_philo_unalive(table);
 }

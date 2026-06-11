@@ -14,7 +14,7 @@
 #include "lib.h"
 #include <unistd.h>
 
-// void	table_main_routine(t_table *table, t_config *config)
+// void	table_main_routine(t_table *table, t_config config)
 // {
 // 	// for_each(table->philosophers, table->count, philo_init_prerun);
 

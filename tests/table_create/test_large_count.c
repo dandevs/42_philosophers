@@ -6,6 +6,7 @@
 int	main(void)
 {
 	t_table	table;
+	t_config	config;
 	int		count;
 	int		spot_checks[] = {0, 1, 42, 99, 199};
 	int		n_checks;
@@ -14,7 +15,8 @@ int	main(void)
 
 	count = 200;
 	n_checks = 5;
-	if (!table_create(&table, count))
+	config = (t_config){0};
+	if (!table_create(&table, config, count))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.count != count)
 		return (fprintf(stderr, "expected count %d, got %d\n", count, table.count), 1);
