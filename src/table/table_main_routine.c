@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/14 22:15:29 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/11 16:06:24 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/11 18:11:53 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -40,21 +40,25 @@ void	table_main_routine(t_table *table)
 	int i;
 
 	table_start_philos(table);
-	while (table->alive)
+	while (1)
 	{
-		i = 0;
+		pthread_mutex_lock(&table->mutex);
+		if (!table->alive)
+			break ;
 
+		i = 0;
 		while (i < table->count)
 		{
 			t_philosopher	philo = table->philosophers[i];
 			pthread_mutex_lock(&philo.mutex);
-			pthread_mutex_lock(&table->mutex);
 			unsigned long	elapsed = get_time_ms() - philo.time_last_meal;
 
-			if (philo.alive && elapsed > table->config.time_to_die)
+			if (!philo.alive)
 			{
 				table->alive = 0;
-				break;
+				pthread_mutex_unlock(&philo.mutex);
+				pthread_mutex_unlock(&table->mutex);
+				break ;
 			}
 
 			pthread_mutex_unlock(&philo.mutex);
@@ -62,6 +66,7 @@ void	table_main_routine(t_table *table)
 			i++;
 		}
 
+		pthread_mutex_unlock(&table->mutex);
 		usleep(POLLING_RATE);
 	}
 

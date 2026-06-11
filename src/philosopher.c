@@ -28,26 +28,22 @@ void	*philo_main_routine(void *arg)
 	config = table->config;
 	state = PHILO_STATE_GET_FORKS;
 
-			// printf("philo an table alive?";
 	while (1)
 	{
 		mutex_philo_table_lock(philo);
 
 		if (!philo->alive || !table->alive)
-			break ;
-
-		if (get_time_ms() > philo->time_last_meal + config.time_to_die)
 		{
 			mutex_philo_table_unlock(philo);
 			break ;
 		}
 
-		// if (get_time_ms() >= philo->time_last_meal + config->time_to_die)
-		// {
-		// 	philo->alive = 0;
-		// 	mutex_philo_table_unlock(philo);
-		// 	break ;
-		// }
+		if (get_time_ms() > philo->time_last_meal + config.time_to_die)
+		{
+			philo->alive = 0;
+			mutex_philo_table_unlock(philo);
+			break ;
+		}
 
 		if (state == PHILO_STATE_GET_FORKS)
 		{
@@ -69,8 +65,11 @@ void	*philo_main_routine(void *arg)
 		{
 			if (get_time_ms() >= philo->time_began_eating + config.time_to_eat)
 			{
+				mutex_forks_lock(philo);
 				release_both_forks(philo);
 				state = PHILO_STATE_SLEEP;
+				mutex_forks_unlock(philo);
+				philo->time_began_sleep = get_time_ms();
 			}
 		}
 

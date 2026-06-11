@@ -59,7 +59,7 @@ int	table_start_philos(t_table *table)
 			philo_main_routine, &table->philosophers[i]) != 0)
 		{
 			table->threads_created = i;
-			return (1);
+			return (0);
 		}
 		i++;
 	}
