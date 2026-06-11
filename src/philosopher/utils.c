@@ -6,19 +6,19 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/08 12:22:32 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/10 03:13:22 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/11 15:46:06 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "utils.h"
 
-void	mutex_philo_lock(t_philosopher *philo)
+void	mutex_philo_table_lock(t_philosopher *philo)
 {
 	pthread_mutex_lock(&philo->mutex);
 	pthread_mutex_lock(&philo->table->mutex);
 }
 
-void	mutex_philo_release(t_philosopher *philo)
+void	mutex_philo_table_unlock(t_philosopher *philo)
 {
 	pthread_mutex_unlock(&philo->mutex);
 	pthread_mutex_unlock(&philo->table->mutex);
@@ -69,7 +69,7 @@ void	mutex_forks_lock(t_philosopher *philo)
 	pthread_mutex_lock(&philo->fork_right->mutex);
 }
 
-void	mutex_forks_release(t_philosopher *philo)
+void	mutex_forks_unlock(t_philosopher *philo)
 {
 	pthread_mutex_unlock(&philo->fork_left->mutex);
 	pthread_mutex_unlock(&philo->fork_right->mutex);

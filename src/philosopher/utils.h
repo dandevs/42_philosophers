@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/08 20:00:05 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/09 15:05:30 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/11 15:46:05 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -25,9 +25,9 @@ void	take_right_fork(t_philosopher *philo);
 void	release_left_fork(t_philosopher *philo);
 void	release_right_fork(t_philosopher *philo);
 void	release_both_forks(t_philosopher *philo);
-void	mutex_philo_lock(t_philosopher *philo);
-void	mutex_philo_release(t_philosopher *philo);
+void	mutex_philo_table_lock(t_philosopher *philo);
+void	mutex_philo_table_unlock(t_philosopher *philo);
 void	mutex_forks_lock(t_philosopher *philo);
-void	mutex_forks_release(t_philosopher *philo);
+void	mutex_forks_unlock(t_philosopher *philo);
 
 #endif
