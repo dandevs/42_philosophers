@@ -29,19 +29,9 @@ int	main(int argc, char **argv)
 			"[number_of_times_each_philosopher_must_eat]\n", argv[0]);
 		return (1);
 	}
-	if (!table_create(&table, config, config.philosophers_count))
+	if (!table_create(&table, config))
 		return (1);
+	table_main_routine(&table);
 	table_free(&table);
-
-	while (1)
-	{
-		for (int i = 0; i < table.count; i++)
-		{
-			
-		}
-
-		usleep(100);
-	}
-
 	return (0);
 }

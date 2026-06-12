@@ -9,7 +9,8 @@ int	main(void)
 	t_config	config;
 
 	config = (t_config){0};
-	if (!table_create(&table, config, 5))
+	config.philosophers_count = 5;
+	if (!table_create(&table, config))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	table_free(&table);
 	return (0);

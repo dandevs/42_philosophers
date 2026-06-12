@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/19 00:14:39 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/09 11:18:31 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/12 03:31:59 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -14,6 +14,7 @@
 #include "lib.h"
 #include <stdlib.h>
 #include <sys/time.h>
+#include <stdarg.h>
 
 unsigned long	get_time_ms(void)
 {
@@ -53,9 +54,9 @@ static int validate_arguments(t_config *config)
 {
 	if (config->philosophers_count <= 0)
 		return (0);
-	if (config->time_to_die <= 0 || config->time_to_eat <= 0)
+	if (config->time_to_die_ms <= 0 || config->time_to_eat_ms <= 0)
 		return (0);
-	if (config->time_to_sleep <= 0)
+	if (config->time_to_sleep_ms <= 0)
 		return (0);
 	if (config->meals_required != -1 && config->meals_required <= 0)
 		return (0);
@@ -68,11 +69,11 @@ int	parse_arguments(int argc, char **argv, t_config *config)
 		return (0);
 	if (!parse_argument(argv[1], &config->philosophers_count))
 		return (0);
-	if (!parse_argument(argv[2], &config->time_to_die))
+	if (!parse_argument(argv[2], &config->time_to_die_ms))
 		return (0);
-	if (!parse_argument(argv[3], &config->time_to_eat))
+	if (!parse_argument(argv[3], &config->time_to_eat_ms))
 		return (0);
-	if (!parse_argument(argv[4], &config->time_to_sleep))
+	if (!parse_argument(argv[4], &config->time_to_sleep_ms))
 		return (0);
 	if (argc == 6)
 	{
@@ -91,7 +92,7 @@ void	for_each(void *arr, int len, void (*func)(void *elem))
 	i = 0;
 	while (i < len) 
 	{
-		func((void *)((char *)arr + i * sizeof(void *)));
+		func((void *)((char *)arr + i * sizeof(t_philosopher)));
 		i++;
 	}
 }
@@ -103,7 +104,7 @@ int		all(void *arr, int len, int (*predicate)(void *elem))
 	i = 0;
 	while (i < len) 
 	{
-		if (!predicate((void *)((char *)arr + i * sizeof(void *))))
+		if (!predicate((void *)((char *)arr + i * sizeof(t_philosopher))))
 			return (0);
 		i++;
 	}

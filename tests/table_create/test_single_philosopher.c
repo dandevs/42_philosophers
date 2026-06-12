@@ -1,4 +1,5 @@
 #include "lib.h"
+#include "lock.h"
 #include "table/table.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,7 +10,8 @@ int	main(void)
 	t_config	config;
 
 	config = (t_config){0};
-	if (!table_create(&table, config, 1))
+	config.philosophers_count = 1;
+	if (!table_create(&table, config))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.count != 1)
 		return (fprintf(stderr, "expected count 1, got %d\n", table.count), 1);

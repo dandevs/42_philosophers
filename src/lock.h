@@ -1,24 +1,29 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   table.h                                            :+:      :+:    :+:   */
+/*   lock.h                                             :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/04/14 22:40:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/12 04:45:14 by danimend         ###   ########.fr       */
+/*   Created: 2026/06/12 00:00:00 by danimend          #+#    #+#             */
+/*   Updated: 2026/06/12 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef TABLE_H
-# define TABLE_H
+#ifndef LOCK_H
+# define LOCK_H
 
-# include "lib.h"
+# include <pthread.h>
 
-int     table_create(t_table *table, t_config config);
-int     table_start_philos(t_table *table);
-void    table_free(t_table *table);
-void	table_main_routine(t_table *table);
-void	mark_all_philo_unalive(t_table *table);
+typedef struct s_lock
+{
+	pthread_mutex_t	mutex;
+	int				locked;
+}	t_lock;
+
+void	lock_init(t_lock *lock);
+void	lock_destroy(t_lock *lock);
+void	lock_lock(t_lock *lock);
+void	lock_unlock(t_lock *lock);
 
 #endif

@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/14 22:15:29 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/11 18:11:53 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/12 05:00:23 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -20,56 +20,93 @@ static void	philo_is_dead(void *philo)
 {
 	t_philosopher *p = philo;
 
-	pthread_mutex_lock(&p->mutex);
+	pthread_mutex_lock(p->mutex);
 	p->alive = 0;
-	pthread_mutex_unlock(&p->mutex);
+	pthread_mutex_unlock(p->mutex);
 }
 
-void mark_all_philo_unalive(t_table *table)
+void	mark_all_philo_unalive(t_table *table)
 {
-	for (int i = 0; i < table->count; i++)
+	int	i;
+
+	i = 0;
+	while (i < table->count)
 	{
-		pthread_mutex_lock(&table->philosophers[i].mutex);
+		pthread_mutex_lock(table->philosophers[i].mutex);
 		table->philosophers[i].alive = 0;
-		pthread_mutex_unlock(&table->philosophers[i].mutex);
+		pthread_mutex_unlock(table->philosophers[i].mutex);
+		i++;
 	}
+}
+
+static int is_philo_done(void *philo)
+{
+	t_philosopher *p = philo;
+
+	pthread_mutex_lock(p->mutex);
+	int done = p->done;
+	pthread_mutex_unlock(p->mutex);
+	return done;
 }
 
 void	table_main_routine(t_table *table)
 {
 	int i;
+	t_config config = table->config;
 
 	table_start_philos(table);
 	while (1)
 	{
-		pthread_mutex_lock(&table->mutex);
+		pthread_mutex_lock(table->mutex);
 		if (!table->alive)
+		{
+			pthread_mutex_unlock(table->mutex);
 			break ;
+		}
 
 		i = 0;
 		while (i < table->count)
 		{
 			t_philosopher	philo = table->philosophers[i];
-			pthread_mutex_lock(&philo.mutex);
+			pthread_mutex_lock(philo.mutex);
+
+			if (philo.done)
+			{
+				pthread_mutex_unlock(philo.mutex);
+				i++;
+				continue ;
+			}
+
 			unsigned long	elapsed = get_time_ms() - philo.time_last_meal;
 
-			if (!philo.alive)
+			if (elapsed > config.time_to_die_ms)
 			{
 				table->alive = 0;
-				pthread_mutex_unlock(&philo.mutex);
-				pthread_mutex_unlock(&table->mutex);
+				pthread_mutex_unlock(philo.mutex);
 				break ;
 			}
 
-			pthread_mutex_unlock(&philo.mutex);
-			pthread_mutex_unlock(&table->mutex);
+			pthread_mutex_unlock(philo.mutex);
 			i++;
 		}
 
-		pthread_mutex_unlock(&table->mutex);
+		if (!table->alive)
+		{
+			pthread_mutex_unlock(table->mutex);
+			break ;
+		}
+
+		if (all(table->philosophers, table->count, is_philo_done))
+		{
+			table->alive = 0;
+			pthread_mutex_unlock(table->mutex);
+			break ;
+		}
+
+		pthread_mutex_unlock(table->mutex);
 		usleep(POLLING_RATE);
 	}
 
-	if (!table->alive)
+	if (!all(table->philosophers, table->count, is_philo_done))
 		printf("A philosopher has died. Ending simulation.\n");
 }

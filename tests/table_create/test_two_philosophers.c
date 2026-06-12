@@ -1,4 +1,5 @@
 #include "lib.h"
+#include "lock.h"
 #include "table/table.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -10,7 +11,8 @@ int	main(void)
 	t_config	config;
 
 	config = (t_config){0};
-	if (!table_create(&table, config, 2))
+	config.philosophers_count = 2;
+	if (!table_create(&table, config))
 		return (fprintf(stderr, "table_create returned 0\n"), 1);
 	if (table.philosophers[0].fork_left != &table.forks[0]
 		|| table.philosophers[0].fork_right != &table.forks[1])
