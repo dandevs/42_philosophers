@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/19 00:14:39 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/12 21:57:55 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 15:26:30 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -101,7 +101,7 @@ int	parse_arguments(int argc, char **argv, t_config *config)
 	return (1);
 }
 
-void	philo_log(t_philosopher *philo, const char *message)
+void	philo_log(t_philosopher *philo, char *message)
 {
 	if (!m_get_int(&philo->mutex, &philo->alive)
 		|| !m_get_int(&philo->table->mutex, &philo->table->alive))

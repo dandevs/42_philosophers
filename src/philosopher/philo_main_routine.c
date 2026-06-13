@@ -56,7 +56,7 @@ void	*philo_main_routine(void *arg)
 	config = philo->table->config;
 
 	if (philo->index % 2 == 0)
-		usleep(100);
+		usleep(250);
 	while (is_running(philo))
 	{
 		lock_forks(philo);
@@ -77,6 +77,7 @@ void	*philo_main_routine(void *arg)
 		philo_log(philo, "is sleeping");
 		usleep(config.time_to_sleep_ms * 1000);
 		philo_log(philo, "is thinking");
+		usleep(500);
 	}
 	return (NULL);
 }
