@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:10 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 15:28:01 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 20:20:37 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -15,7 +15,7 @@
 #include <pthread.h>
 #include <sys/time.h>
 
-# define POLLING_RATE 200
+# define POLLING_RATE 100
 
 typedef struct s_table	t_table;
 typedef struct s_lock	t_lock;
@@ -23,6 +23,7 @@ typedef struct s_lock	t_lock;
 typedef struct s_philosopher
 {
 	pthread_mutex_t	mutex;
+	pthread_mutex_t	schedule_mutex;
 	pthread_mutex_t	*fork_left;
 	pthread_mutex_t	*fork_right;
 	t_table			*table;
@@ -30,6 +31,9 @@ typedef struct s_philosopher
 	int				index;
 	int				eat_count;
 	int				done;
+	int				schedule_locked;
+	int				alive;
+	int				iteration;
 	unsigned long	time_last_meal;
 	unsigned long	time_began_eating;
 	unsigned long	time_began_sleep;

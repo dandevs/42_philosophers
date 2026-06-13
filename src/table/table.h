@@ -17,6 +17,6 @@
 
 int		table_create(t_table *table, t_config config);
 void	table_free(t_table *table);
-void	table_main_routine(t_table *table);
+int		table_main_routine(t_table *table);
 
 #endif

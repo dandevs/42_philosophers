@@ -15,16 +15,16 @@
 
 # include <pthread.h>
 
-int	m_set_int(pthread_mutex_t *mutex, int *ptr, int new_value);
-int	m_get_int(pthread_mutex_t *mutex, int *ptr);
+int	m_set_int(int *ptr, int new_value, pthread_mutex_t *mutex);
+int	m_get_int(int *ptr, pthread_mutex_t *mutex);
 
 unsigned long	m_set_ulong(
-					pthread_mutex_t *mutex,
 					unsigned long *ptr,
-					unsigned long new_value);
+					unsigned long new_value,
+					pthread_mutex_t *mutex);
 
 unsigned long	m_get_ulong(
-					pthread_mutex_t *mutex,
-					unsigned long *ptr);
+					unsigned long *ptr,
+					pthread_mutex_t *mutex);
 
 #endif

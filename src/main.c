@@ -28,7 +28,8 @@ int	main(int argc, char **argv)
 	}
 	if (!table_create(&table, config))
 		return (1);
-	table_main_routine(&table);
+	if (!table_main_routine(&table))
+		return (0);
 	table_free(&table);
 	return (0);
 }
