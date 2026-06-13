@@ -1,29 +1,21 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   lock.h                                             :+:      :+:    :+:   */
+/*   philo_round_robin.h                                :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/06/12 00:00:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/12 22:41:15 by danimend         ###   ########.fr       */
+/*   Created: 2026/06/13 05:38:50 by danimend          #+#    #+#             */
+/*   Updated: 2026/06/13 07:13:27 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef LOCK_H
-# define LOCK_H
 
-# include <pthread.h>
 
-typedef struct s_lock
-{
-	pthread_mutex_t	mutex;
-	int				locked;
-}	t_lock;
 
-void	lock_init(t_lock *lock);
-void	lock_destroy(t_lock *lock);
-void	lock_lock(t_lock *lock);
-void	lock_unlock(t_lock *lock);
+#ifndef PHILO_ROUND_ROBIN_H
+# define PHILO_ROUND_ROBIN_H
+
+
 
 #endif

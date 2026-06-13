@@ -1,6 +1,6 @@
 #include <pthread.h>
 
-int	set_int(pthread_mutex_t *mutex, int *ptr, int new_value)
+int	m_set_int(pthread_mutex_t *mutex, int *ptr, int new_value)
 {
 	pthread_mutex_lock(mutex);
 	*ptr = new_value;
@@ -8,7 +8,7 @@ int	set_int(pthread_mutex_t *mutex, int *ptr, int new_value)
 	return new_value;
 }
 
-int get_int(pthread_mutex_t *mutex, int *ptr)
+int m_get_int(pthread_mutex_t *mutex, int *ptr)
 {
 	int result;
 
@@ -18,7 +18,7 @@ int get_int(pthread_mutex_t *mutex, int *ptr)
 	return (result);
 }
 
-unsigned long set_ulong(pthread_mutex_t *mutex, unsigned long *ptr, unsigned long new_value)
+unsigned long m_set_ulong(pthread_mutex_t *mutex, unsigned long *ptr, unsigned long new_value)
 {
 	pthread_mutex_lock(mutex);
 	*ptr = new_value;
@@ -26,7 +26,7 @@ unsigned long set_ulong(pthread_mutex_t *mutex, unsigned long *ptr, unsigned lon
 	return new_value;
 }
 
-unsigned long get_ulong(pthread_mutex_t *mutex, unsigned long *ptr)
+unsigned long m_get_ulong(pthread_mutex_t *mutex, unsigned long *ptr)
 {
 	unsigned long result;
 
