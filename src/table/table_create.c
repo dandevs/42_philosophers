@@ -6,22 +6,42 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/13 15:44:14 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 16:59:15 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 21:40:14 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "lib.h"
+#include "fork.h"
 #include "philosopher/utils.h"
 #include <stdlib.h>
 
-int	table_create(t_table *table, t_config config)
+static int	initialize_forks(t_table *table)
 {
 	int	i;
 
-	table->config = config;
-	table->forks = malloc(sizeof(pthread_mutex_t) * config.philo_count);
-	// table->ph
+	table->forks = malloc(sizeof(t_fork) * table->config.philo_count);
 	if (!table->forks)
+		return (0);
+	i = 0;
+	while (i < table->config.philo_count)
+	{
+		if (!fork_init(&table->forks[i]))
+		{
+			free(table->forks);
+			return (0);
+		}
+		i++;
+	}
+	return (1);
+}
+
+int	table_create(t_table *table, t_config config)
+{
+	t_philosopher	*philo;
+	int				i;
+
+	table->config = config;
+	if (!initialize_forks(table))
 		return (0);
 	table->philosophers = malloc(sizeof(t_philosopher) * config.philo_count);
 	if (!table->philosophers)
@@ -32,13 +52,11 @@ int	table_create(t_table *table, t_config config)
 	i = 0;
 	while (i < config.philo_count)
 	{
-		t_philosopher *philo = &table->philosophers[i];
+		philo = &table->philosophers[i];
 		philo->table = table;
-		pthread_mutex_init(&table->forks[i], NULL);
 		philo->fork_left = &table->forks[i];
 		philo->fork_right = &table->forks[(i + 1) % config.philo_count];
 		philo_init(philo, i);
-		pthread_mutex_lock(&philo->schedule_mutex);
 		i++;
 	}
 	pthread_mutex_init(&table->printf_mutex, NULL);

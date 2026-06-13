@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:10 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 20:20:37 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 21:40:26 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -14,6 +14,7 @@
 # define LIB_H
 #include <pthread.h>
 #include <sys/time.h>
+#include "fork.h"
 
 # define POLLING_RATE 100
 
@@ -23,9 +24,8 @@ typedef struct s_lock	t_lock;
 typedef struct s_philosopher
 {
 	pthread_mutex_t	mutex;
-	pthread_mutex_t	schedule_mutex;
-	pthread_mutex_t	*fork_left;
-	pthread_mutex_t	*fork_right;
+	t_fork 			*fork_left;
+	t_fork 			*fork_right;
 	t_table			*table;
 	pthread_t		thread;
 	int				index;
@@ -53,7 +53,7 @@ typedef struct s_config
 typedef struct s_table
 {
 	t_philosopher	*philosophers;
-	pthread_mutex_t	*forks;
+	t_fork			*forks;
 	pthread_mutex_t	printf_mutex;
 	pthread_mutex_t	mutex;
 	t_config		config;

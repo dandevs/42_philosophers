@@ -1,29 +1,27 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   lock.h                                             :+:      :+:    :+:   */
+/*   fork.h                                             :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/06/12 00:00:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/12 22:41:15 by danimend         ###   ########.fr       */
+/*   Created: 2026/06/13 21:31:15 by danimend          #+#    #+#             */
+/*   Updated: 2026/06/13 21:33:07 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef LOCK_H
-# define LOCK_H
 
-# include <pthread.h>
 
-typedef struct s_lock
+#ifndef FORK_H
+# define FORK_H
+#include <pthread.h>
+
+typedef struct s_fork
 {
-	pthread_mutex_t	mutex;
-	int				locked;
-}	t_lock;
+    pthread_mutex_t mutex;
+    int available;
+}   t_fork;
 
-void	lock_init(t_lock *lock);
-void	lock_destroy(t_lock *lock);
-void	lock_lock(t_lock *lock);
-void	lock_unlock(t_lock *lock);
+int fork_init(t_fork *fork);
 
 #endif

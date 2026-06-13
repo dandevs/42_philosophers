@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/08 12:22:32 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 17:35:22 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 21:58:41 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -37,8 +37,7 @@ int	philo_init(t_philosopher *philosophers, int index)
 	philosophers->eat_count = 0;
 	philosophers->done = 0;
 	philosophers->schedule_locked = 0;
-	return (pthread_mutex_init(&philosophers->mutex, NULL) &&
-			pthread_mutex_init(&philosophers->schedule_mutex, NULL) == 0);
+	return (pthread_mutex_init(&philosophers->mutex, NULL) == 0);
 }
 
 void	philo_init_time(t_table *table)
