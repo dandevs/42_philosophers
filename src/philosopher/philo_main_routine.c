@@ -16,39 +16,54 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
-
-static int	is_running(t_philosopher *philo)
+	
+static int	get_both_forks(t_philosopher *philo)
 {
-	return (m_get_int(&philo->table->alive, &philo->table->mutex));
-}
-
-static void	lock_forks(t_philosopher *philo)
-{
-	if (philo->index % 2 == 0)
+	if (philo->fork_left == philo->fork_right)
 	{
-		pthread_mutex_lock(philo->fork_left);
-		philo_log(philo, "has taken a fork");
-		pthread_mutex_lock(philo->fork_right);
-		philo_log(philo, "has taken a fork");
-	}
-	else
-	{
-		pthread_mutex_lock(philo->fork_right);
-		philo_log(philo, "has taken a fork");
-		pthread_mutex_lock(philo->fork_left);
-		philo_log(philo, "has taken a fork");
+		while (m_get_int(&philo->alive, &philo->mutex))
+			usleep(POLLING_RATE);
+		return (0);
 	}
 
-	// pthread_mutex_lock(philo->fork_left);
-	// philo_log(philo, "has taken a fork");
-	// pthread_mutex_lock(philo->fork_right);
-	// philo_log(philo, "has taken a fork");
+	while (m_get_int(&philo->alive, &philo->mutex))
+	{
+		pthread_mutex_lock(&philo->fork_left->mutex);
+		pthread_mutex_lock(&philo->fork_right->mutex);
+
+		if (philo->fork_left->available && philo->fork_right->available)
+		{
+			philo->fork_left->available = 0;
+			philo->fork_right->available = 0;
+			pthread_mutex_unlock(&philo->fork_left->mutex);
+			pthread_mutex_unlock(&philo->fork_right->mutex);
+			return (1);
+		}
+
+		pthread_mutex_unlock(&philo->fork_left->mutex);
+		pthread_mutex_unlock(&philo->fork_right->mutex);
+		usleep(POLLING_RATE);
+	}
+
+	return (0);
 }
 
-static void	unlock_forks(t_philosopher *philo)
+static void unlock_both_forks(t_philosopher *philo)
 {
-	pthread_mutex_unlock(philo->fork_left);
-	pthread_mutex_unlock(philo->fork_right);
+	if (philo->fork_left == philo->fork_right)
+	{
+		while (1)
+			usleep(POLLING_RATE);
+	}
+
+	pthread_mutex_lock(&philo->fork_left->mutex);
+	pthread_mutex_lock(&philo->fork_right->mutex);
+
+	philo->fork_left->available = 1;
+	philo->fork_right->available = 1;
+
+	pthread_mutex_unlock(&philo->fork_left->mutex);
+	pthread_mutex_unlock(&philo->fork_right->mutex);
 }
 
 void	*philo_main_routine(void *arg)
@@ -61,12 +76,13 @@ void	*philo_main_routine(void *arg)
 
 	while (1)
 	{
-		lock_forks(philo);
+		get_both_forks(philo);
 		m_set_ulong(&philo->time_began_eating, get_time_ms(), &philo->mutex);
 		philo_log(philo, "is eating");
 		usleep(config.time_to_eat_ms * 1000);
-		unlock_forks(philo);
 		m_set_ulong(&philo->time_last_meal, get_time_ms(), &philo->mutex);
+
+		unlock_both_forks(philo);
 
 		m_set_int(&philo->eat_count,
 			m_get_int(&philo->eat_count, &philo->mutex) + 1, &philo->mutex);
