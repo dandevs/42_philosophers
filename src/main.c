@@ -18,5 +18,17 @@
 
 int	main(int argc, char **argv)
 {
+	t_config	config;
+	t_table		table;
+
+	if (!parse_arguments(argc, argv, &config))
+	{
+		printf("Error: invalid arguments\n");
+		return (1);
+	}
+	if (!table_create(&table, config))
+		return (1);
+	table_main_routine(&table);
+	table_free(&table);
 	return (0);
 }

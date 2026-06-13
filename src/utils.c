@@ -15,7 +15,6 @@
 #include "mutex_utils.h"
 #include <stdlib.h>
 #include <sys/time.h>
-#include <stdarg.h>
 #include <stdio.h>
 
 unsigned long	get_time_ms(void)
@@ -42,26 +41,41 @@ int	is_valid_number(char *str)
 	return (str[i] == '\0');
 }
 
-int	parse_argument(char *str, int *value)
+unsigned long	ft_atoul(char *str)
+{
+	unsigned long	result;
+	int				i;
+
+	i = 0;
+	result = 0;
+	while (str[i] >= '0' && str[i] <= '9')
+	{
+		result = result * 10 + (str[i] - '0');
+		i++;
+	}
+	return (result);
+}
+
+int	parse_ulong(char *str, unsigned long *value)
 {
 	if (!is_valid_number(str))
 		return (0);
-	*value = atoi(str);
-	if (*value <= 0)
+	*value = ft_atoul(str);
+	if (*value == 0)
 		return (0);
 	return (1);
 }
 
-static int validate_arguments(t_config *config)
+int	parse_int(char *str, int *value)
 {
-	if (config->philo_count <= 0)
+	unsigned long	tmp;
+
+	if (!is_valid_number(str))
 		return (0);
-	if (config->time_to_die_ms <= 0 || config->time_to_eat_ms <= 0)
+	tmp = ft_atoul(str);
+	if (tmp == 0)
 		return (0);
-	if (config->time_to_sleep_ms <= 0)
-		return (0);
-	if (config->meals_required != -1 && config->meals_required <= 0)
-		return (0);
+	*value = (int)tmp;
 	return (1);
 }
 
@@ -69,17 +83,17 @@ int	parse_arguments(int argc, char **argv, t_config *config)
 {
 	if (argc != 5 && argc != 6)
 		return (0);
-	if (!parse_argument(argv[1], &config->philo_count))
+	if (!parse_int(argv[1], &config->philo_count))
 		return (0);
-	if (!parse_argument(argv[2], &config->time_to_die_ms))
+	if (!parse_ulong(argv[2], &config->time_to_die_ms))
 		return (0);
-	if (!parse_argument(argv[3], &config->time_to_eat_ms))
+	if (!parse_ulong(argv[3], &config->time_to_eat_ms))
 		return (0);
-	if (!parse_argument(argv[4], &config->time_to_sleep_ms))
+	if (!parse_ulong(argv[4], &config->time_to_sleep_ms))
 		return (0);
 	if (argc == 6)
 	{
-		if (!parse_argument(argv[5], &config->meals_required))
+		if (!parse_int(argv[5], &config->meals_required))
 			return (0);
 	}
 	else

@@ -17,26 +17,10 @@
 #include <pthread.h>
 #include <stdio.h>
 
-static int is_alive(t_philosopher *philo)
+static int	is_running(t_philosopher *philo)
 {
-	return (!m_get_int(&philo->mutex, &philo->alive) ||
-			!m_get_int(&philo->table->mutex, &philo->table->alive));
-}
-
-static int	check_death(t_philosopher *philo)
-{
-	unsigned long time_began_eating = m_get_ulong(&philo->mutex, &philo->time_began_eating);
-
-	if (!is_alive(philo))
-		return (1);
-
-	if (get_time_ms() > time_began_eating + philo->table->config.time_to_die_ms)
-	{
-		m_set_int(&philo->mutex, &philo->alive, 0);
-		return (1);
-	}
-
-	return (0);
+	return (m_get_int(&philo->mutex, &philo->alive)
+		&& m_get_int(&philo->table->mutex, &philo->table->alive));
 }
 
 static void	lock_forks(t_philosopher *philo)
@@ -65,25 +49,34 @@ static void	unlock_forks(t_philosopher *philo)
 
 void	*philo_main_routine(void *arg)
 {
-	t_philosopher	*philo = (t_philosopher *)arg;
-	t_table			*table = philo->table;
-	t_config		config = table->config;
+	t_philosopher	*philo;
+	t_config		config;
 
-	while (1)
+	philo = (t_philosopher *)arg;
+	config = philo->table->config;
+
+	if (philo->index % 2 == 0)
+		usleep(100);
+	while (is_running(philo))
 	{
 		lock_forks(philo);
 		m_set_ulong(&philo->mutex, &philo->time_began_eating, get_time_ms());
 		philo_log(philo, "is eating");
-
+		usleep(config.time_to_eat_ms * 1000);
 		unlock_forks(philo);
 		m_set_ulong(&philo->mutex, &philo->time_last_meal, get_time_ms());
-
+		m_set_int(&philo->mutex, &philo->eat_count,
+			m_get_int(&philo->mutex, &philo->eat_count) + 1);
+		if (config.meals_required != -1
+			&& m_get_int(&philo->mutex, &philo->eat_count)
+			>= config.meals_required)
+		{
+			m_set_int(&philo->mutex, &philo->done, 1);
+			return (NULL);
+		}
 		philo_log(philo, "is sleeping");
 		usleep(config.time_to_sleep_ms * 1000);
-		
 		philo_log(philo, "is thinking");
-		usleep(config.time_to_think_ms * 1000);
 	}
-
 	return (NULL);
 }

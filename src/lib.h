@@ -61,5 +61,7 @@ typedef struct s_table
 
 unsigned long	get_time_ms(void);
 void	philo_log(t_philosopher *philo, const char *message);
+void	*philo_main_routine(void *arg);
+int		parse_arguments(int argc, char **argv, t_config *config);
 
 #endif

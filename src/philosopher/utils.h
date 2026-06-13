@@ -22,10 +22,7 @@
 void	with_philo_mutex(t_philosopher *philo, void (*func)(t_philosopher *));
 void	mutex_philo_table_lock(t_philosopher *philo);
 void	mutex_philo_table_unlock(t_philosopher *philo);
-void	mutex_forks_lock(t_philosopher *philo);
-void	mutex_forks_unlock(t_philosopher *philo);
-void	philo_mutexes_unlock(t_philosopher *philo);
 int		philo_init(t_philosopher *philosophers, int index);
-void	philo_init_time(t_philosopher *philosophers);
+void	philo_init_time(t_table *table);
 
 #endif

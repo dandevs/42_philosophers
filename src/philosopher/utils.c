@@ -31,24 +31,6 @@ void	with_philo_mutex(t_philosopher *philo, void (*func)(t_philosopher *))
 	pthread_mutex_unlock(&philo->mutex);
 }
 
-void	mutex_forks_lock(t_philosopher *philo)
-{
-	lock_lock(philo->fork_left);
-	lock_lock(philo->fork_right);
-}
-
-void	mutex_forks_unlock(t_philosopher *philo)
-{
-	lock_unlock(philo->fork_left);
-	lock_unlock(philo->fork_right);
-}
-
-void	philo_mutexes_unlock(t_philosopher *philo)
-{
-	lock_unlock(philo->fork_left);
-	lock_unlock(philo->fork_right);
-}
-
 int	philo_init(t_philosopher *philosophers, int index)
 {
 	philosophers->index = index;
@@ -58,10 +40,20 @@ int	philo_init(t_philosopher *philosophers, int index)
 	return (pthread_mutex_init(&philosophers->mutex, NULL) == 0);
 }
 
-void	philo_init_time(t_philosopher *philosophers)
+void	philo_init_time(t_table *table)
 {
-	unsigned long t = get_time_ms();
-	philosophers->time_last_meal = t;
-	philosophers->time_began_eating = t;
-	philosophers->time_began_sleep = t;
+	unsigned long	t;
+	int				i;
+
+	t = get_time_ms();
+	table->start_time = t;
+	i = 0;
+	while (i < table->config.philo_count)
+	{
+		table->philosophers[i].time_last_meal = t;
+		table->philosophers[i].time_began_eating = t;
+		table->philosophers[i].time_began_sleep = t;
+		table->philosophers[i].start_time = t;
+		i++;
+	}
 }
