@@ -19,8 +19,7 @@
 
 static int	is_running(t_philosopher *philo)
 {
-	return (m_get_int(&philo->mutex, &philo->alive)
-		&& m_get_int(&philo->table->mutex, &philo->table->alive));
+	return (m_get_int(&philo->table->mutex, &philo->table->alive));
 }
 
 static void	lock_forks(t_philosopher *philo)

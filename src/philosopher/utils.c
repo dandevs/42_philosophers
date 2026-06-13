@@ -34,7 +34,6 @@ void	with_philo_mutex(t_philosopher *philo, void (*func)(t_philosopher *))
 int	philo_init(t_philosopher *philosophers, int index)
 {
 	philosophers->index = index;
-	philosophers->alive = 1;
 	philosophers->eat_count = 0;
 	philosophers->done = 0;
 	return (pthread_mutex_init(&philosophers->mutex, NULL) == 0);

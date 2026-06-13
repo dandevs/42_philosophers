@@ -28,7 +28,6 @@ typedef struct s_philosopher
 	t_table			*table;
 	pthread_t		thread;
 	int				index;
-	int				alive;
 	int				eat_count;
 	int				done;
 	unsigned long	time_last_meal;

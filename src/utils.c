@@ -103,8 +103,7 @@ int	parse_arguments(int argc, char **argv, t_config *config)
 
 void	philo_log(t_philosopher *philo, char *message)
 {
-	if (!m_get_int(&philo->mutex, &philo->alive)
-		|| !m_get_int(&philo->table->mutex, &philo->table->alive))
+	if (!m_get_int(&philo->table->mutex, &philo->table->alive))
 		return ;
 	pthread_mutex_lock(&philo->table->printf_mutex);
 	printf("%lu %d %s\n", get_time_ms() - philo->table->start_time,
