@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/18 05:59:43 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/14 15:11:04 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -74,6 +74,8 @@ static int	philo_eat(t_philosopher *philo, t_config config)
 	philo_log(philo, "is eating");
 	usleep(config.time_to_eat_ms * 1000);
 	unlock_both_forks(philo);
+	if (!m_get_int(&philo->alive, &philo->mutex))
+		return (1);
 	m_set_int(&philo->eat_count,
 		m_get_int(&philo->eat_count, &philo->mutex) + 1, &philo->mutex);
 	if (config.meals_required != -1
@@ -97,6 +99,8 @@ void	*philo_main_routine(void *arg)
 	{
 		usleep(((m_get_int(&philo->eat_count, &philo->mutex)
 					+ philo->index) * 200) % 5000);
+		if (!m_get_int(&philo->alive, &philo->mutex))
+			break ;
 		if (!get_both_forks(philo))
 			break ;
 		if (philo_eat(philo, config))
