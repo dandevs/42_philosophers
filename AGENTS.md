@@ -1,3 +1,5 @@
+> **Keep me updated!** After any significant code changes (new modules, renamed functions, changed patterns), update this file so agents stay aligned with the actual codebase.
+
 ## Build
 
 ```
@@ -6,156 +8,182 @@ make debug    # build with -g -O0
 make fclean   # clean objects + executable
 ```
 
-- **CFLAGS strict flags are commented out** in Makefile (`-Wall -Wextra -Werror -pthread`). Uncomment before evaluation. The `-pthread` flag (needed for linking) is inside that commented-out line.
-- Must use `cc` compiler (currently `CC = cc`). Makefile must not perform unnecessary relinking — currently OK since `$(NAME)` has proper object prerequisites.
+- **CFLAGS strict flags are commented out** in Makefile (`-Wall -Wextra -Werror -pthread`). Uncomment before evaluation. (All source currently compiles clean under these flags.)
+- `CC = cc`. Sources auto-discovered: any `.c`/`.h` in `src/` subtree.
 - Required targets: `$(NAME)`, `all`, `clean`, `fclean`, `re`.
-- Sources auto-discovered: any `.c`/`.h` in `src/` subtree is compiled. Adding files works with no Makefile changes.
 
 ## Testing
 
-Custom test runner builds via auto-generated `test_build/Makefile`. Run: `ctester`
+Custom test runner: `ctester`. Full authoring guide in `tests/AGENTS.md`.
 
 ### Test Structure
 
-Each test is a standalone `.c` file with its own `main`:
+Each test is a standalone `.c` file with its own `main` (linked against `libproject.a`, which excludes `main.c`):
+- Include headers via `src/` path: `#include "lib.h"`, `#include "table/table.h"`.
+- Return `0` on success (silent), non-zero + single-line `printf(...)` to **stdout** on failure (no prefix).
+- `parse.c` helpers (`is_valid_number`, `ft_atoul`, `parse_int`, `parse_ulong`) have no header declaration — forward-declare them in the test file.
+- Tests that trigger code-under-test to print (death message, sim logs) redirect `stdout` to `/dev/null` via `dup`/`dup2` for clean output.
 
-- **Include** project headers via the `src/` path: `#include "lib.h"`, `#include "table/table.h"`
-- **On success**: return `0`, print nothing.
-- **On failure**: return non-zero and print error to stderr via `fprintf(stderr, ...)`. No "FAIL:" or "Error:" prefixes.
-- **No print on success** — silent = passing.
+### Current Suites (`tests/`)
+- `parse/` — arg parsing (valid/invalid, all helpers + `parse_arguments`).
+- `mutex_utils/` — `m_set`/`m_get` round-trips for int & ulong.
+- `fork/` — `fork_init` state.
+- `philosopher/` — `philo_init`, `philo_init_time`.
+- `table/` — `table_create` (allocation, fork linkage incl. single-philo, availability), `table_free` (NULL-safe).
+- `monitor/` — `check_all_done` (no-limit/partial/all), `someone_died` (fresh/expired).
+- `utils/` — `get_time_ms` monotonicity.
+- `integration/` — full `table_main_routine`: single-philo death (+ no-eat), starvation death, meals-required clean stop, 2-philo no-deadlock, 5-philo & 4-philo survival windows (no death), 2-philo death timing within 10ms. Assert on state + wall-clock timing (generous margins); stdout suppressed (or captured for the death-timing timestamp parse).
 
 ### Adding Tests
-
-1. Create directory: `mkdir tests/my_suite`
+1. `mkdir tests/my_suite`
 2. Add `.c` files: `tests/my_suite/test_basic.c`
 3. Run: `ctester`
 
+## File Map
+
+| File | Role |
+|---|---|
+| `src/main.c` | Entry: `parse_arguments` → `table_create` → `table_main_routine` → `table_free` |
+| `src/lib.h` | Core structs (`t_philosopher`, `t_config`, `t_table`) + shared prototypes |
+| `src/fork.h`, `src/fork/fork.c` | `t_fork` + `fork_init` |
+| `src/mutex_utils.h`, `src/mutex_utils/mutex_utils.c` | Typed mutex get/set helpers |
+| `src/parse.c` | `parse_arguments`, `parse_int`, `parse_ulong`, `is_valid_number`, `ft_atoul` (custom, no `atoi`) |
+| `src/utils.c` | `get_time_ms`, `philo_log` |
+| `src/philosopher/utils.h`, `src/philosopher/utils.c` | `philo_init`, `philo_init_time` |
+| `src/philosopher/philo_main_routine.c` | Philosopher thread routine |
+| `src/table/table.h` | Table function prototypes |
+| `src/table/table_create.c` | `table_create` (+ static `initialize_forks`, `init_philosopher`) |
+| `src/table/table_main_routine.c` | `table_main_routine` (+ static `create_threads`) |
+| `src/table/table_monitor.c` | `someone_died` (+ static `check_death`), `check_all_done`, `stop_threads` |
+| `src/table/table_utils.c` | `table_free` |
+
 ## Architecture
 
-- Each philosopher thread runs autonomously: eat → sleep → think loop. The table never orchestrates philosopher actions.
-- **The monitor detects death and prints it.** The philosopher never self-diagnoses or prints its own death. The monitor (main thread or separate thread) checks each philosopher's `last_meal_time` against `time_to_die`.
-- `death_flag` (mutex-protected) is the sole coordination point: the monitor sets it, philosophers check it between actions to know when to exit.
-- **No thread killing**: `pthread_cancel`, `pthread_kill`, `exit()` are not allowed. Only cooperative exit via `death_flag` checks.
-- A philosopher that dies while eating (holding both fork mutexes) must release those forks on exit. If it doesn't, neighboring philosophers stuck on `pthread_mutex_lock` will never unblock and `pthread_join` in the main thread will hang forever.
-- A philosopher blocked in `pthread_mutex_lock` when another philosopher dies stays stuck until that fork's mutex is unlocked by the dying philosopher's cleanup (see previous bullet).
-- Circular table: philosopher 1 sits next to philosopher N (where N = `number_of_philosophers`). Philosopher N sits between N-1 and 1. For 0-indexed code: philo 0 = philosopher 1 (1-indexed).
-- Asymmetric fork pickup prevents deadlock: even IDs grab left→right, odd IDs grab right→left.
-- Even-numbered philosophers stagger start with `usleep(1000)` before first action to avoid thundering herd.
-- Single philosopher: no threads — print "taken fork", polling sleep `time_to_die`, print "died".
-- One death stops the entire simulation (`death_flag` → all philosophers exit).
-- `meals_eaten` and `last_meal_time` are written by the philosopher and read by the monitor — protect with per-philosopher mutex.
-- All `printf` output is protected by a shared print mutex to prevent interleaved messages.
+### Data Structures
 
-## 42 Constraints (not obvious from code)
+- **`t_fork`** (`src/fork.h`): `{ pthread_mutex_t mutex; int available; }`. `fork_init` sets `available = 1` and inits the mutex. The `available` flag is guarded by the fork's own mutex.
+- **`t_config`** (`src/lib.h`): `philo_count`, `meals_required` (or `-1`), `time_to_die_ms`, `time_to_eat_ms`, `time_to_sleep_ms`. (No think-time field — the thinking phase is instant.)
+- **`t_philosopher`** (`src/lib.h`): `mutex` (embedded), `fork_left`/`fork_right` (`t_fork *` — shared into `table->forks[]`), `table`, `thread`, `index`, `eat_count`, `done`, `alive`, `time_began_eating`, `start_time`.
+- **`t_table`** (`src/lib.h`): `philosophers` array, `forks` (`t_fork *` — `malloc`'d array), `printf_mutex` (embedded), `mutex` (embedded), `config`, `start_time`, `alive`.
 
-- **Norm**: max 25 lines/function, no `for` loops, variable declarations at top of scope. Use `while` loops.
-- **No global variables**.
-- **No external libraries** (Libft not authorized).
-- **No atomics**: `<stdatomic.h>` is not in the allowed functions list. Mutexes only for synchronization.
-- **Allowed functions (mandatory)**: `memset`, `printf`, `malloc`, `free`, `write`, `usleep`, `gettimeofday`, `pthread_create`, `pthread_detach`, `pthread_join`, `pthread_mutex_init`, `pthread_mutex_destroy`, `pthread_mutex_lock`, `pthread_mutex_unlock`
-- **Allowed functions (bonus)**: all mandatory + `fork`, `kill`, `exit`, `waitpid`, `sem_open`, `sem_close`, `sem_post`, `sem_wait`, `sem_unlink`
-- Using anything outside these lists is a grading failure.
+### Key Patterns
 
-## TEMPORARY — Remove Before Evaluation
+- **Typed mutex get/set** (`src/mutex_utils.h`). **Signature order is field-ptr first, mutex last:**
+  - `m_set_int(int *ptr, int new_value, pthread_mutex_t *mutex)` / `m_get_int(int *ptr, pthread_mutex_t *mutex)`
+  - `m_set_ulong(unsigned long *ptr, unsigned long new_value, pthread_mutex_t *mutex)` / `m_get_ulong(unsigned long *ptr, pthread_mutex_t *mutex)`
+  - Call sites look like `m_set_int(&philo->done, 1, &philo->mutex)`.
+  - Type-safe: no `(void*)` casts, no size mismatch (the old `set_with_mutex` wrote `sizeof(void*)` bytes into `int` fields, corrupting adjacent memory on 64-bit — these replace it).
+- **`philo_log(philo, msg)`** (`src/utils.c`): no-op if `table->alive == 0`; else prints `<ms_since_start> <philo_id> <msg>\n` under `table->printf_mutex`. Philo id is `index + 1` (1-indexed).
+- **`get_time_ms()`** (`src/utils.c`): `gettimeofday` → `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
+- `POLLING_RATE = 100` (µs) defined in `lib.h`.
 
-`atoi()` in `src/utils.c:parse_argument()` must be replaced with a custom implementation.
+### Mutex Embedding Rule
+
+Per-object mutexes (`philo->mutex`, `table->mutex`, `table->printf_mutex`) are **embedded** (`pthread_mutex_t`, not pointer) — no separate malloc, accessed via `&philo->mutex`.
+
+Shared forks MUST remain pointers (`t_fork *fork_left/right` in philo, `t_fork *forks` in table) because adjacent philosophers share fork references and the fork array is dynamically sized.
+
+### Philosopher Lifecycle
+
+- Each philosopher runs in a **joinable** thread (created in `create_threads`). Threads are joined by `stop_threads` at shutdown — **not** detached.
+- Routine in `src/philosopher/philo_main_routine.c`:
+  - `while (alive)`: small startup stagger `usleep(((eat_count + index) * 200) % 5000)` → `get_both_forks()` → `philo_eat()` (returns 1 to stop when `meals_required` reached) → `philo_log("is sleeping")` → `usleep(time_to_sleep)` → `philo_log("is thinking")` → repeat.
+  - **No death self-check** in the routine — death is detected solely by the monitor. Philo loops only re-check `alive` (set by `stop_threads`).
+- **`get_both_forks`**: single-philo special case (`fork_left == fork_right`) logs one "has taken a fork" then busy-waits on `alive` until the monitor kills it (returns 0, loop breaks). Otherwise loops `try_lock_forks` until success or death.
+- **`try_lock_forks`** (no hold-and-wait): lock right→left fork mutexes, check both `available`; if both free set both `available = 0`, unlock both, log "has taken a fork" ×2, return 1; else unlock both, return 0. Because both mutexes are always taken/released together, no circular wait → no deadlock.
+- **`philo_eat`**: `time_began_eating = now` → log "is eating" → `usleep(time_to_eat)` → `unlock_both_forks` → `eat_count++` → if `meals_required != -1 && eat_count >= meals_required`, set `done = 1` and return 1.
+- **`unlock_both_forks`**: single-philo case busy-waits forever (it's dying); otherwise sets both `available = 1` under the fork mutexes.
+- Philosopher fields (`alive`, `eat_count`, `done`, `time_began_eating`) protected by per-philosopher `mutex`.
+- `philo_init` — sets `index`, `alive = 1`, `eat_count = 0`, `done = 0`, inits mutex.
+- `philo_init_time` — sets `table->start_time` and each philo's `time_began_eating` / `start_time` to `get_time_ms()`.
+
+### Table Lifecycle
+
+- `table_create` (`src/table/table_create.c`): `initialize_forks` (`malloc` `t_fork[]`, `fork_init` each), `malloc` philosophers, `init_philosopher` each (assigns `fork_left = &forks[i]`, `fork_right = &forks[(i+1) % n]`, calls `philo_init`), inits `printf_mutex` + `mutex`, sets `alive = 1`, stores `config`.
+- `table_main_routine` (`src/table/table_main_routine.c`): `philo_init_time` → `create_threads` (`pthread_create` each) → monitor loop → `stop_threads` → returns 1.
+- `table_free` (`src/table/table_utils.c`): frees `forks` + `philosophers` arrays. (Single definition — no duplicate.)
+
+### Monitoring Architecture
+
+- **Main thread runs the monitor** (no separate monitor thread), in `table_main_routine`.
+- Loop: `while (!done)` check `someone_died` / `check_all_done`, else `usleep(POLLING_RATE)`.
+- **`someone_died`** → static `check_death` per philo: reads `time_began_eating` via `m_get_ulong`, `elapsed = now - time_began_eating`; if `elapsed >= time_to_die_ms`, sets `table->alive = 0` under table mutex, prints `"<t> <id> died\n"` under `printf_mutex`, returns 1. (Variable is named `last_meal` locally but reads `time_began_eating`.)
+- **`check_all_done`**: returns 0 immediately if `meals_required == -1`; else returns 1 only when every philo has `done == 1`.
+- **`stop_threads`**: sets `table->alive = 0`, sets each philo `alive = 0`, then `pthread_join`s every thread. After it returns, `table_main_routine` returns to `main`, which calls `table_free`.
+- Death is the **last printed message** (the `philo_log` no-op gate + `printf_mutex` ordering enforce this).
+
+### Current State
+
+- Simulation is **fully wired and working**. All four evaluator cases pass (see below): single-philo death, starvation death, `meals_required` clean stop, and 200-philosopher stress (no deadlock/crash/death over long runs).
+- Compiles clean under `-Wall -Wextra -Werror -pthread`.
+- **Remaining pre-evaluation tasks:**
+  - Uncomment the strict `CFLAGS` line in `Makefile`.
+  - Write the root `README.md` (italicized first line `*...by <login>*`, Description, Instructions, Resources).
+  - Implement `philo_bonus/` (processes + semaphores, files named `*_bonus.{c,h}`).
+
+## 42 Constraints
+
+- **Norm**: 25 lines/func, no `for`, vars at top of scope, `while` loops.
+- **No globals**, **no external libs**, **no atomics**.
+- **Allowed (mandatory)**: `memset`, `printf`, `malloc`, `free`, `write`, `usleep`, `gettimeofday`, `pthread_create`, `pthread_detach`, `pthread_join`, `pthread_mutex_init`, `pthread_mutex_destroy`, `pthread_mutex_lock`, `pthread_mutex_unlock`. (Currently uses `pthread_join`; `pthread_detach` is unused.)
+- **Allowed (bonus)**: above + `fork`, `kill`, `exit`, `waitpid`, `sem_open`, `sem_close`, `sem_post`, `sem_wait`, `sem_unlink`
+- **Norm violations (current)**: none known.
 
 ## Program Specification
 
 ### Arguments
 ```
-./philo number_of_philosophers time_to_die time_to_eat time_to_sleep [number_of_times_each_philosopher_must_eat]
+./philo philo_count time_to_die time_to_eat time_to_sleep [meals_required]
 ```
-All values in milliseconds. `meals_required = -1` when unset.
+`meals_required = -1` when unset (simulation runs until someone dies). All args are validated as positive integers via `parse_int`/`parse_ulong`.
 
-### Log Format (exact, timestamps in ms relative to sim start)
+### Log Format (ms relative to sim start, 1-indexed philo numbers)
 ```
-timestamp_in_ms X has taken a fork
-timestamp_in_ms X is eating
-timestamp_in_ms X is sleeping
-timestamp_in_ms X is thinking
-timestamp_in_ms X died
+timestamp X has taken a fork
+timestamp X is eating
+timestamp X is sleeping
+timestamp X is thinking
+timestamp X died
 ```
-X = philosopher number (1-indexed). No overlapping messages. Death within 10ms.
-Death is the **last printed message**. No "thinking" or "sleeping" appears after a death line.
+Death is the **last printed message**. No output after death. Death within 10ms.
 
 ### Mandatory vs Bonus
-- **Mandatory**: threads + mutexes. Executable: `philo`, files in `philo/` directory.
-- **Bonus**: processes + semaphores. Executable: `philo_bonus`, files in `philo_bonus/` directory named `*_bonus.{c/h}`.
-- Single philosopher (1 fork): can't eat, must die. Handle without threads.
-- **Bonus specifics**: All forks in center of table, available forks tracked via semaphore (init to `number_of_philosophers`). Each philosopher is a separate `fork()` process. Main process does NOT act as a philosopher. Bonus evaluated only if mandatory is perfect.
+- **Mandatory**: threads + mutexes (current `src/`, builds to `./philo`).
+- **Bonus**: processes + semaphores in `philo_bonus/`, files named `*_bonus.{c/h}`. Not yet started.
 
 ## Critical Gotchas
 
 ### Timing
-- `usleep()` takes **microseconds** (µs). 1ms = 1000µs. Convert: `usleep(200 * 1000)` for 200ms.
-- `usleep()` overshoots by ms. Never use it for precise waits — use polling loop (`usleep(500)` + time check) instead.
-- Polling sleep is needed for **both eating and sleeping**: if death is detected mid-meal, the philosopher must wake up, see `death_flag`, release forks, and exit. A blocking `usleep(time_to_eat * 1000)` prevents this.
-- Death detection must be within 10ms. Monitor loop checks every ~0.5ms.
-- `gettimeofday()` returns µs, args are ms. Convert: `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
-- Record `start_time` BEFORE launching threads. Set each philosopher's `last_meal_time = start_time` before their thread starts.
+- `usleep()` takes µs: `usleep(200 * 1000)` = 200ms.
+- `gettimeofday()` → ms: `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
 
 ### Deadlock Prevention
-- Symmetric left→right pickup causes circular wait. Use even/odd asymmetric ordering: even IDs grab left first, odd IDs grab right first.
-- Stagger start: even-numbered philosophers `usleep(1000)` before first action.
-- Single philosopher: no threads — print "taken fork", sleep `time_to_die`, print "died".
+- **No hold-and-wait**: `try_lock_forks` always locks/releases both fork mutexes together, claiming both only if both `available`, else backs off for `POLLING_RATE`. No circular wait is possible.
+- **Startup stagger** `usleep(((eat_count + index) * 200) % 5000)` desynchronizes philosophers to reduce spin contention.
+- **Single philo** (`fork_left == fork_right`): handled in `get_both_forks` — logs one "has taken a fork", then waits for death (cannot eat with one fork).
 
-### Data Races & Race Conditions
-- Subject explicitly requires **zero data races**. Every shared variable written by one thread and read by another must be mutex-protected.
-- `meals_eaten` and `last_meal_time` need per-philosopher mutex — monitor reads while philosopher writes.
-- `someone_died` flag needs its own mutex. Unprotected int read/write is undefined behavior in C.
-- **`volatile` does NOT fix data races.** It only prevents compiler caching — writes can still tear or be reordered. Only mutexes (or atomics, which are not allowed in 42) prevent data races.
-- `printf` is not atomic — protect all output with a print mutex.
-- Death message is the exception: must print even after `someone_died` is set.
+### Data Races
+- Every shared variable written/read across threads is mutex-protected.
+- `eat_count` / `done` / `alive` / `time_began_eating` (philo): per-philosopher `mutex` (use the `m_*` helpers).
+- `table->alive`: table `mutex`.
+- All `printf` output: shared `printf_mutex` (via `philo_log`, which also gates on `table->alive`).
+- `volatile` does NOT fix data races — only mutexes do.
 
 ### Cleanup Order
-- `pthread_join` ALL threads before destroying any mutex.
-- Every `pthread_mutex_init` must have matching `pthread_mutex_destroy`.
-- Bonus: `sem_unlink` before `sem_open` (stale semaphores in `/dev/shm/`), `waitpid` all children.
+- Threads are joinable. `stop_threads` flips `alive` flags (waking any busy-waiting philo loops) and `pthread_join`s every thread before `table_main_routine` returns.
+- `main` then calls `table_free` (frees the two arrays). No `pthread_mutex_destroy` calls — on Linux (NPTL), default mutexes don't allocate heap, so Valgrind reports no leaks from skipping destroy.
+- Single-philo `unlock_both_forks` intentionally never returns (infinite `usleep`) — that philosopher is dying and never releases its lone fork; the process exits shortly after.
 
 ### Key Evaluator Test Cases
 ```
-./philo 1 800 200 200          # dies, one "taken fork" + death msg
-./philo 4 310 200 100          # dies (time_to_die < eat + sleep)
-./philo 5 800 200 200 5        # all eat exactly 5 times, clean stop
-./philo 200 800 200 200        # stress: no deadlock, no crash
+./philo 1 800 200 200          # dies: 1 "taken fork" + death ~800ms
+./philo 4 310 200 100          # dies (time_to_die < eat + sleep); death ~310ms
+./philo 5 800 200 200 7        # all eat exactly 7 times, clean stop, no death
+./philo 200 800 200 200        # stress: no deadlock, no crash, no death
 ```
-
-### Death Guarantees
-- **`time_to_die < time_to_eat`**: guaranteed death — philosopher cannot finish eating before timer expires. Monitor catches them mid-meal.
-- **`time_to_die < time_to_eat + time_to_sleep`**: typically dead — eating + sleeping exceeds the death window, even without fork contention.
-- **`time_to_die > time_to_eat`**: not automatically dead. Survival depends on sleeping duration and fork contention.
+All four verified passing after the dead-code cleanup (2026-06-14).
 
 ## Submission Structure
-- Mandatory part directory: `philo/` (current project at repo root is `philo/`)
-- Bonus part directory: `philo_bonus/`
-
-## README Requirements (subject mandate)
-Root `README.md` required with:
-- First line italicized: `*This project has been created as part of the 42 curriculum by <login>*`
-- **Description** section — goal and overview
-- **Instructions** section — compilation, installation, execution
-- **Resources** section — classic references + how AI was used and for which tasks
-
-## 42 Header Dates
-
-To get the correct timestamp for `Created:` / `Updated:` in 42 headers:
-```
-date '+%Y/%m/%d %H:%M:%S'
-```
-
-## Reference Docs
-
-- `FUNCTIONS.md` — API reference for all allowed functions with implementation patterns and code examples
-
-## Philosopher Utilities (`src/philosopher/utils.h`, `src/philosopher/utils.c`)
-
-Shared helper functions for fork manipulation in `philo_main_routine`:
-
-- **`with_philo_lock(t_philosopher *philo, void (*func)(t_philosopher *))`** — Locks `philo->mutex`, calls `func(philo)`, unlocks. Used to atomically modify philosopher fields from the philosopher thread.
-- **`take_left_fork(t_philosopher *philo)`** — Sets `fork_left->available = 0`, `has_fork_left = 1`.
-- **`take_right_fork(t_philosopher *philo)`** — Sets `fork_right->available = 0`, `has_fork_right = 1`.
-- **`release_left_fork(t_philosopher *philo)`** — Sets `fork_left->available = 1`, `has_fork_left = 0`.
-- **`release_right_fork(t_philosopher *philo)`** — Sets `fork_right->available = 1`, `has_fork_right = 0`.
-
-Include: `#include "philosopher/utils.h"`
+- Mandatory: `philo/` (current repo root builds `./philo`).
+- Bonus: `philo_bonus/`.
+- Root `README.md` required: italicized first line (`*...by <login>*`), Description, Instructions, Resources.

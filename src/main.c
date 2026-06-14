@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/13 23:19:43 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/21 17:14:29 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/12 20:07:31 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -23,25 +23,13 @@ int	main(int argc, char **argv)
 
 	if (!parse_arguments(argc, argv, &config))
 	{
-		printf("Error: wrong number of arguments\n");
-		printf("Usage: %s number_of_philosophers time_to_die "
-			"time_to_eat time_to_sleep "
-			"[number_of_times_each_philosopher_must_eat]\n", argv[0]);
+		printf("Error: invalid arguments\n");
 		return (1);
 	}
-	if (!table_create(&table, config, config.philosophers_count))
+	if (!table_create(&table, config))
 		return (1);
+	if (!table_main_routine(&table))
+		return (0);
 	table_free(&table);
-
-	while (1)
-	{
-		for (int i = 0; i < table.count; i++)
-		{
-			
-		}
-
-		usleep(100);
-	}
-
 	return (0);
 }

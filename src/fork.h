@@ -1,25 +1,25 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   table.h                                            :+:      :+:    :+:   */
+/*   fork.h                                             :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/04/14 22:40:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
+/*   Created: 2026/06/13 21:31:15 by danimend          #+#    #+#             */
+/*   Updated: 2026/06/13 21:33:07 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef TABLE_H
-# define TABLE_H
+#ifndef FORK_H
+# define FORK_H
+# include <pthread.h>
 
-# include "lib.h"
+typedef struct s_fork
+{
+	pthread_mutex_t	mutex;
+	int				available;
+}	t_fork;
 
-int		table_create(t_table *table, t_config config);
-void	table_free(t_table *table);
-int		table_main_routine(t_table *table);
-int		someone_died(t_table *table);
-int		check_all_done(t_table *table);
-void	stop_threads(t_table *table);
+int	fork_init(t_fork *fork);
 
-#endif /* TABLE_H */
+#endif /* FORK_H */

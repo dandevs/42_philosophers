@@ -1,25 +1,25 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   table.h                                            :+:      :+:    :+:   */
+/*   mutex_utils.h                                      :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/04/14 22:40:00 by danimend          #+#    #+#             */
+/*   Created: 2026/06/12 22:23:33 by danimend          #+#    #+#             */
 /*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef TABLE_H
-# define TABLE_H
+#ifndef MUTEX_UTILS_H
+# define MUTEX_UTILS_H
 
-# include "lib.h"
+# include <pthread.h>
 
-int		table_create(t_table *table, t_config config);
-void	table_free(t_table *table);
-int		table_main_routine(t_table *table);
-int		someone_died(t_table *table);
-int		check_all_done(t_table *table);
-void	stop_threads(t_table *table);
+int				m_set_int(int *ptr, int new_value, pthread_mutex_t *mutex);
+int				m_get_int(int *ptr, pthread_mutex_t *mutex);
+unsigned long	m_set_ulong(unsigned long *ptr, unsigned long new_value,
+					pthread_mutex_t *mutex);
+unsigned long	m_get_ulong(unsigned long *ptr,
+					pthread_mutex_t *mutex);
 
-#endif /* TABLE_H */
+#endif /* MUTEX_UTILS_H */

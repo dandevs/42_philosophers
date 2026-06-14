@@ -6,71 +6,33 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/08 12:22:32 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/11 15:46:06 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/13 21:58:41 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "utils.h"
 
-void	mutex_philo_table_lock(t_philosopher *philo)
+int	philo_init(t_philosopher *philosophers, int index)
 {
-	pthread_mutex_lock(&philo->mutex);
-	pthread_mutex_lock(&philo->table->mutex);
+	philosophers->index = index;
+	philosophers->eat_count = 0;
+	philosophers->done = 0;
+	philosophers->alive = 1;
+	return (pthread_mutex_init(&philosophers->mutex, NULL) == 0);
 }
 
-void	mutex_philo_table_unlock(t_philosopher *philo)
+void	philo_init_time(t_table *table)
 {
-	pthread_mutex_unlock(&philo->mutex);
-	pthread_mutex_unlock(&philo->table->mutex);
-}
+	unsigned long	t;
+	int				i;
 
-void	with_philo_lock(t_philosopher *philo, void (*func)(t_philosopher *))
-{
-	pthread_mutex_lock(&philo->mutex);
-	func(philo);
-	pthread_mutex_unlock(&philo->mutex);
-}
-
-void	take_left_fork(t_philosopher *philo)
-{
-	philo->fork_left->available = 0;
-	philo->has_fork_left = 1;
-}
-
-void	take_right_fork(t_philosopher *philo)
-{
-	philo->fork_right->available = 0;
-	philo->has_fork_right = 1;
-}
-
-void	release_left_fork(t_philosopher *philo)
-{
-	philo->fork_left->available = 1;
-	philo->has_fork_left = 0;
-}
-
-void	release_right_fork(t_philosopher *philo)
-{
-	philo->fork_right->available = 1;
-	philo->has_fork_right = 0;
-}
-
-void	release_both_forks(t_philosopher *philo)
-{
-	philo->fork_left->available = 1;
-	philo->fork_right->available = 1;
-	philo->has_fork_left = 0;
-	philo->has_fork_right = 0;
-}
-
-void	mutex_forks_lock(t_philosopher *philo)
-{
-	pthread_mutex_lock(&philo->fork_left->mutex);
-	pthread_mutex_lock(&philo->fork_right->mutex);
-}
-
-void	mutex_forks_unlock(t_philosopher *philo)
-{
-	pthread_mutex_unlock(&philo->fork_left->mutex);
-	pthread_mutex_unlock(&philo->fork_right->mutex);
+	t = get_time_ms();
+	table->start_time = t;
+	i = 0;
+	while (i < table->config.philo_count)
+	{
+		table->philosophers[i].time_began_eating = t;
+		table->philosophers[i].start_time = t;
+		i++;
+	}
 }

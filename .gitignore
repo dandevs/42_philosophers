@@ -87,3 +87,6 @@ valgrind*.txt
 # Backup files
 *.bak
 *.backup
+
+# Temp folder
+tmp/
