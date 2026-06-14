@@ -29,7 +29,6 @@ static int	create_threads(t_table *table)
 			return (0);
 		i++;
 	}
-	table->threads_created = 1;
 	return (1);
 }
 

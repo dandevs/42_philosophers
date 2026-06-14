@@ -73,7 +73,6 @@ static int	philo_eat(t_philosopher *philo, t_config config)
 	m_set_ulong(&philo->time_began_eating, get_time_ms(), &philo->mutex);
 	philo_log(philo, "is eating");
 	usleep(config.time_to_eat_ms * 1000);
-	m_set_ulong(&philo->time_last_meal, get_time_ms(), &philo->mutex);
 	unlock_both_forks(philo);
 	m_set_int(&philo->eat_count,
 		m_get_int(&philo->eat_count, &philo->mutex) + 1, &philo->mutex);

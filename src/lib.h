@@ -19,7 +19,6 @@
 # define POLLING_RATE 100
 
 typedef struct s_table	t_table;
-typedef struct s_lock	t_lock;
 
 typedef struct s_philosopher
 {
@@ -31,12 +30,8 @@ typedef struct s_philosopher
 	int				index;
 	int				eat_count;
 	int				done;
-	int				schedule_locked;
 	int				alive;
-	int				iteration;
-	unsigned long	time_last_meal;
 	unsigned long	time_began_eating;
-	unsigned long	time_began_sleep;
 	unsigned long	start_time;
 }	t_philosopher;
 
@@ -47,7 +42,6 @@ typedef struct s_config
 	unsigned long	time_to_die_ms;
 	unsigned long	time_to_eat_ms;
 	unsigned long	time_to_sleep_ms;
-	unsigned long	time_to_think_ms;
 }	t_config;
 
 typedef struct s_table
@@ -59,7 +53,6 @@ typedef struct s_table
 	t_config		config;
 	unsigned long	start_time;
 	int				alive;
-	int				threads_created;
 }	t_table;
 
 unsigned long	get_time_ms(void);
