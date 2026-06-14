@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/13 15:44:14 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 21:40:14 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -35,10 +35,20 @@ static int	initialize_forks(t_table *table)
 	return (1);
 }
 
-int	table_create(t_table *table, t_config config)
+static void	init_philosopher(t_table *table, int i)
 {
 	t_philosopher	*philo;
-	int				i;
+
+	philo = &table->philosophers[i];
+	philo->table = table;
+	philo->fork_left = &table->forks[i];
+	philo->fork_right = &table->forks[(i + 1) % table->config.philo_count];
+	philo_init(philo, i);
+}
+
+int	table_create(t_table *table, t_config config)
+{
+	int	i;
 
 	table->config = config;
 	if (!initialize_forks(table))
@@ -52,11 +62,7 @@ int	table_create(t_table *table, t_config config)
 	i = 0;
 	while (i < config.philo_count)
 	{
-		philo = &table->philosophers[i];
-		philo->table = table;
-		philo->fork_left = &table->forks[i];
-		philo->fork_right = &table->forks[(i + 1) % config.philo_count];
-		philo_init(philo, i);
+		init_philosopher(table, i);
 		i++;
 	}
 	pthread_mutex_init(&table->printf_mutex, NULL);

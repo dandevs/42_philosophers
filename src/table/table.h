@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/04/14 22:40:00 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/12 20:06:13 by danimend         ###   ########.fr       */
+/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -18,5 +18,8 @@
 int		table_create(t_table *table, t_config config);
 void	table_free(t_table *table);
 int		table_main_routine(t_table *table);
+int		someone_died(t_table *table);
+int		check_all_done(t_table *table);
+void	stop_threads(t_table *table);
 
-#endif
+#endif /* TABLE_H */

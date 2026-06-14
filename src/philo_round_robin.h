@@ -10,12 +10,7 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-
-
-
 #ifndef PHILO_ROUND_ROBIN_H
 # define PHILO_ROUND_ROBIN_H
 
-
-
-#endif
+#endif /* PHILO_ROUND_ROBIN_H */

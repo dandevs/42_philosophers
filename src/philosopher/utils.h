@@ -10,8 +10,8 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef PHILO_UTILS_H
-# define PHILO_UTILS_H
+#ifndef UTILS_H
+# define UTILS_H
 
 # include "lib.h"
 
@@ -25,4 +25,4 @@ void	mutex_philo_table_unlock(t_philosopher *philo);
 int		philo_init(t_philosopher *philosophers, int index);
 void	philo_init_time(t_table *table);
 
-#endif
+#endif /* UTILS_H */

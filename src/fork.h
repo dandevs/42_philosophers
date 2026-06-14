@@ -10,18 +10,16 @@
 /*                                                                            */
 /* ************************************************************************** */
 
-
-
 #ifndef FORK_H
 # define FORK_H
-#include <pthread.h>
+# include <pthread.h>
 
 typedef struct s_fork
 {
-    pthread_mutex_t mutex;
-    int available;
-}   t_fork;
+	pthread_mutex_t	mutex;
+	int				available;
+}	t_fork;
 
-int fork_init(t_fork *fork);
+int	fork_init(t_fork *fork);
 
-#endif
+#endif /* FORK_H */

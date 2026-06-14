@@ -12,9 +12,9 @@
 
 #ifndef LIB_H
 # define LIB_H
-#include <pthread.h>
-#include <sys/time.h>
-#include "fork.h"
+# include <pthread.h>
+# include <sys/time.h>
+# include "fork.h"
 
 # define POLLING_RATE 100
 
@@ -24,8 +24,8 @@ typedef struct s_lock	t_lock;
 typedef struct s_philosopher
 {
 	pthread_mutex_t	mutex;
-	t_fork 			*fork_left;
-	t_fork 			*fork_right;
+	t_fork			*fork_left;
+	t_fork			*fork_right;
 	t_table			*table;
 	pthread_t		thread;
 	int				index;
@@ -63,8 +63,8 @@ typedef struct s_table
 }	t_table;
 
 unsigned long	get_time_ms(void);
-void	philo_log(t_philosopher *philo, char *message);
-void	*philo_main_routine(void *arg);
-int		parse_arguments(int argc, char **argv, t_config *config);
+void			philo_log(t_philosopher *philo, char *message);
+void			*philo_main_routine(void *arg);
+int				parse_arguments(int argc, char **argv, t_config *config);
 
-#endif
+#endif /* LIB_H */
