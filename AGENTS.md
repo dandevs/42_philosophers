@@ -14,13 +14,25 @@ make fclean   # clean objects + executable
 
 ## Testing
 
-Custom test runner: `ctester`
+Custom test runner: `ctester`. Full authoring guide in `tests/AGENTS.md`.
 
 ### Test Structure
 
-Each test is a standalone `.c` file with its own `main`:
-- Include headers via `src/` path: `#include "lib.h"`, `#include "table/table.h"`
-- Return `0` on success (silent), non-zero + `fprintf(stderr, ...)` on failure.
+Each test is a standalone `.c` file with its own `main` (linked against `libproject.a`, which excludes `main.c`):
+- Include headers via `src/` path: `#include "lib.h"`, `#include "table/table.h"`.
+- Return `0` on success (silent), non-zero + single-line `printf(...)` to **stdout** on failure (no prefix).
+- `parse.c` helpers (`is_valid_number`, `ft_atoul`, `parse_int`, `parse_ulong`) have no header declaration — forward-declare them in the test file.
+- Tests that trigger code-under-test to print (death message, sim logs) redirect `stdout` to `/dev/null` via `dup`/`dup2` for clean output.
+
+### Current Suites (`tests/`)
+- `parse/` — arg parsing (valid/invalid, all helpers + `parse_arguments`).
+- `mutex_utils/` — `m_set`/`m_get` round-trips for int & ulong.
+- `fork/` — `fork_init` state.
+- `philosopher/` — `philo_init`, `philo_init_time`.
+- `table/` — `table_create` (allocation, fork linkage incl. single-philo, availability), `table_free` (NULL-safe).
+- `monitor/` — `check_all_done` (no-limit/partial/all), `someone_died` (fresh/expired).
+- `utils/` — `get_time_ms` monotonicity.
+- `integration/` — full `table_main_routine`: single-philo death (+ no-eat), starvation death, meals-required clean stop, 2-philo no-deadlock, 5-philo & 4-philo survival windows (no death), 2-philo death timing within 10ms. Assert on state + wall-clock timing (generous margins); stdout suppressed (or captured for the death-timing timestamp parse).
 
 ### Adding Tests
 1. `mkdir tests/my_suite`

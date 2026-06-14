@@ -16,21 +16,25 @@ Each test is a single `.c` file with its own `main`:
 
 int	main(void)
 {
-	t_table	table;
+	t_table		table;
 	t_config	config;
 
 	config = (t_config){0};
-	if (!table_create(&table, config, 5))
+	config.philo_count = 5;
+	config.time_to_die_ms = 800;
+	config.time_to_eat_ms = 200;
+	config.time_to_sleep_ms = 200;
+	if (!table_create(&table, config))
 	{
 		printf("table_create returned 0");
 		return (1);
 	}
-	if (table.count != 5)
+	if (table.config.philo_count != 5)
 	{
-		printf("expected count 5, got %d", table.count);
+		printf("expected count 5, got %d", table.config.philo_count);
 		return (1);
 	}
-	table_destroy(&table);
+	table_free(&table);
 	return (0);
 }
 ```
