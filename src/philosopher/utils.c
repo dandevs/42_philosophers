@@ -37,6 +37,7 @@ int	philo_init(t_philosopher *philosophers, int index)
 	philosophers->eat_count = 0;
 	philosophers->done = 0;
 	philosophers->schedule_locked = 0;
+	philosophers->alive = 1;
 	return (pthread_mutex_init(&philosophers->mutex, NULL) == 0);
 }
 

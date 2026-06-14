@@ -5,8 +5,8 @@
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/04/18 05:59:43 by danimend          #+#    #+#             */
-/*   Updated: 2026/04/18 05:59:43 by danimend         ###   ########.fr       */
+/*   Created: 2026/04/18 05:59:43 by danimend         #+#    #+#             */
+/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -16,11 +16,12 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdio.h>
-	
+
 static int	get_both_forks(t_philosopher *philo)
 {
 	if (philo->fork_left == philo->fork_right)
 	{
+		philo_log(philo, "has taken a fork");
 		while (m_get_int(&philo->alive, &philo->mutex))
 			usleep(POLLING_RATE);
 		return (0);
@@ -28,8 +29,8 @@ static int	get_both_forks(t_philosopher *philo)
 
 	while (m_get_int(&philo->alive, &philo->mutex))
 	{
-		pthread_mutex_lock(&philo->fork_left->mutex);
 		pthread_mutex_lock(&philo->fork_right->mutex);
+		pthread_mutex_lock(&philo->fork_left->mutex);
 
 		if (philo->fork_left->available && philo->fork_right->available)
 		{
@@ -37,18 +38,21 @@ static int	get_both_forks(t_philosopher *philo)
 			philo->fork_right->available = 0;
 			pthread_mutex_unlock(&philo->fork_left->mutex);
 			pthread_mutex_unlock(&philo->fork_right->mutex);
+			philo_log(philo, "has taken a fork");
+			philo_log(philo, "has taken a fork");
 			return (1);
 		}
 
 		pthread_mutex_unlock(&philo->fork_left->mutex);
 		pthread_mutex_unlock(&philo->fork_right->mutex);
+
 		usleep(POLLING_RATE);
 	}
 
 	return (0);
 }
 
-static void unlock_both_forks(t_philosopher *philo)
+static void	unlock_both_forks(t_philosopher *philo)
 {
 	if (philo->fork_left == philo->fork_right)
 	{
@@ -74,19 +78,21 @@ void	*philo_main_routine(void *arg)
 	philo = (t_philosopher *)arg;
 	config = philo->table->config;
 
-	while (1)
+	while (m_get_int(&philo->alive, &philo->mutex))
 	{
-		get_both_forks(philo);
+		usleep(
+			((m_get_int(&philo->eat_count, &philo->mutex) + philo->index) * 200) % 5000);
+
+		if (!get_both_forks(philo))
+			break ;
+
 		m_set_ulong(&philo->time_began_eating, get_time_ms(), &philo->mutex);
 		philo_log(philo, "is eating");
 		usleep(config.time_to_eat_ms * 1000);
 		m_set_ulong(&philo->time_last_meal, get_time_ms(), &philo->mutex);
-
 		unlock_both_forks(philo);
-
 		m_set_int(&philo->eat_count,
 			m_get_int(&philo->eat_count, &philo->mutex) + 1, &philo->mutex);
-
 		if (config.meals_required != -1
 			&& m_get_int(&philo->eat_count, &philo->mutex)
 			>= config.meals_required)

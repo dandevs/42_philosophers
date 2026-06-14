@@ -5,8 +5,8 @@
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/06/13 15:44:11 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/13 18:07:20 by danimend         ###   ########.fr       */
+/*   Created: 2026/06/13 15:44:11 by danimend         #+#    #+#             */
+/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -27,7 +27,6 @@ static int	create_threads(t_table *table)
 		if (pthread_create(&table->philosophers[i].thread, NULL,
 				philo_main_routine, &table->philosophers[i]))
 			return (0);
-		pthread_detach(table->philosophers[i].thread);
 		i++;
 	}
 	table->threads_created = 1;
@@ -39,6 +38,8 @@ static int	check_death(t_table *table, int i)
 	unsigned long	last_meal;
 	unsigned long	elapsed;
 
+	if (!m_get_int(&table->alive, &table->mutex))
+		return (0);
 	last_meal = m_get_ulong(&table->philosophers[i].time_began_eating,
 		&table->philosophers[i].mutex);
 	elapsed = get_time_ms() - last_meal;
@@ -71,58 +72,57 @@ static int	check_all_done(t_table *table)
 	return (1);
 }
 
-
-void *table_scheduler(void *args)
+static int	someone_died(t_table *table)
 {
-	t_table *table = (t_table *)args;
-	unsigned int round = 0;
+	int	i;
 
-	while (m_get_int(&table->alive, &table->mutex))
+	i = 0;
+	while (i < table->config.philo_count)
 	{
-		for (int i = 0; i < table->config.philo_count; i++)
-		{
-			t_philosopher *philo = &table->philosophers[i];
-			if ((round + i) % 2 == 0)
-			{
-				// pthread_mutex_unlock(&philo->schedule_mutex);
-				// usleep(1000);
-				// pthread_mutex_lock(&philo->schedule_mutex);
-			}
+		if (check_death(table, i))
+			return (1);
+		i++;
+	}
+	return (0);
+}
 
-		}
-		round++;
+static void	stop_threads(t_table *table)
+{
+	int	i;
+
+	m_set_int(&table->alive, 0, &table->mutex);
+	i = 0;
+	while (i < table->config.philo_count)
+	{
+		m_set_int(&table->philosophers[i].alive, 0,
+			&table->philosophers[i].mutex);
+		i++;
+	}
+	i = 0;
+	while (i < table->config.philo_count)
+	{
+		pthread_join(table->philosophers[i].thread, NULL);
+		i++;
 	}
 }
 
 int	table_main_routine(t_table *table)
 {
-	int	i;
-	unsigned int round = 0;
-	pthread_t scheduler_thread;
+	int	done;
 
+	done = 0;
 	philo_init_time(table);
 	if (!create_threads(table))
 		return (0);
-	if (pthread_create(&scheduler_thread, NULL, table_scheduler, table) != 0)
-		return (0);
-	pthread_detach(scheduler_thread);
-	while (1)
+	while (!done)
 	{
-		i = 0;
-		while (i < table->config.philo_count)
-		{
-			if (check_death(table, i))
-				return (1);
-			i++;
-		}
-		if (check_all_done(table))
-			return (1);
-		usleep(POLLING_RATE);
-		round++;
+		if (someone_died(table))
+			done = 1;
+		else if (check_all_done(table))
+			done = 1;
+		else
+			usleep(POLLING_RATE);
 	}
-
-	for (i = 0; i < table->config.philo_count; i++)
-		m_set_int(&table->philosophers[i].alive, 0, &table->philosophers[i].mutex);
-
+	stop_threads(table);
 	return (1);
 }
