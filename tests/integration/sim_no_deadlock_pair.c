@@ -1,6 +1,7 @@
 #include "lib.h"
 #include "table/table.h"
 #include "mutex_utils.h"
+#include "ctest.h"
 #include <stdio.h>
 #include <unistd.h>
 
@@ -18,33 +19,19 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	saved = dup(1);
 	freopen("/dev/null", "w", stdout);
 	ret = table_main_routine(&table);
 	fflush(stdout);
 	dup2(saved, 1);
 	close(saved);
-	if (!ret)
-	{
-		printf("table_main_routine returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(ret);
 	i = 0;
 	while (i < config.philo_count)
 	{
-		if (m_get_int(&table.philosophers[i].eat_count,
-				&table.philosophers[i].mutex) != 3)
-		{
-			printf("philo %d eat_count expected 3, got %d", i,
-				m_get_int(&table.philosophers[i].eat_count,
-					&table.philosophers[i].mutex));
-			return (1);
-		}
+		ASSERT_EQ(m_get_int(&table.philosophers[i].eat_count,
+				&table.philosophers[i].mutex), 3);
 		i++;
 	}
 	table_free(&table);

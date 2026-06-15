@@ -1,7 +1,7 @@
 #include "lib.h"
 #include "table/table.h"
 #include "philosopher/utils.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -14,17 +14,9 @@ int	main(void)
 	config.time_to_die_ms = 10000;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	philo_init_time(&table);
-	if (someone_died(&table))
-	{
-		printf("someone_died with fresh meals expected 0, got 1");
-		return (1);
-	}
+	ASSERT_FALSE(someone_died(&table));
 	table_free(&table);
 	return (0);
 }

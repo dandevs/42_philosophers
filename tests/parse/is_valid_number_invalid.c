@@ -1,5 +1,5 @@
 #include "lib.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	is_valid_number(char *str);
 
@@ -12,12 +12,7 @@ int	main(void)
 	i = 0;
 	while (i < (int)(sizeof(invalid) / sizeof(invalid[0])))
 	{
-		if (is_valid_number(invalid[i]))
-		{
-			printf("is_valid_number(\"%s\") expected 0, got 1",
-				invalid[i]);
-			return (1);
-		}
+		ASSERT_FALSE(is_valid_number(invalid[i]));
 		i++;
 	}
 	return (0);

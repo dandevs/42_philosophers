@@ -1,18 +1,18 @@
-# Writing Tests for run_tests.py
+# Writing Tests for `ctester`
 
 ## Test Structure
 
 Each test is a single `.c` file with its own `main`:
 
 - **Include** project headers via the `src/` path: `#include "lib.h"`, `#include "table/table.h"`, etc.
-- **On success**: return `0`, print nothing.
-- **On failure**: return non-zero (typically `1`) and print only the error message to stdout. No prefix — the runner adds formatting.
+- **Include** `#include "ctest.h"` for assertion macros.
+- **On success**: `return (0)`, print nothing.
+- **On failure**: use `ASSERT_*` / `EXPECT_*` macros from `ctest.h` — they print a structured failure line and `return (1)`.
 
 ```c
 #include "lib.h"
 #include "table/table.h"
-#include <stdlib.h>
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -24,31 +24,33 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
-	if (table.config.philo_count != 5)
-	{
-		printf("expected count 5, got %d", table.config.philo_count);
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
+	ASSERT_EQ(table.config.philo_count, 5);
 	table_free(&table);
 	return (0);
 }
 ```
 
-Key rules:
+### Available Macros (defined in `tests/ctest.h`)
+
+**Fatal — return 1 immediately on failure:**
+`ASSERT_TRUE`, `ASSERT_FALSE`, `ASSERT_EQ`, `ASSERT_NE`, `ASSERT_GT`, `ASSERT_GE`, `ASSERT_LT`, `ASSERT_LE`, `ASSERT_STREQ`, `ASSERT_STRNE`, `ASSERT_NULL`, `ASSERT_NOT_NULL`, `TEST_FAIL`
+
+**Soft — record failure and continue (end main with `return TEST_RESULT()`):**
+`EXPECT_TRUE`, `EXPECT_FALSE`, `EXPECT_EQ`, `EXPECT_NE`, `EXPECT_STREQ`
+
+### Key Rules
 - Return `0` = pass, non-zero = fail.
-- Print only on failure. No "FAIL:", "Error:", or similar prefixes.
+- No manual `printf` on failure — use the assertion macros.
 - Each test is a standalone executable — define your own `main`.
+- Tests using `dup`/`freopen` to suppress stdout (e.g. integration tests) still need `#include <stdio.h>` alongside `ctest.h`.
 
 ## Directory Layout
 
 ```
 tests/
 ├── AGENTS.md              # This file
+├── ctest.h                # Assertion header
 └── suite_name/            # One directory per test suite
     ├── behavior_a.c
     ├── behavior_b.c
@@ -73,4 +75,4 @@ No other setup required.
 - **Keep tests focused.** A failing test should point to exactly one problem.
 - **Clean up resources.** Call destroy/free functions so the test doesn't leak. Leaks can mask real bugs.
 - **Test edge cases.** Cover 0, 1, 2, and large values explicitly.
-- **Don't print on success.** Silent = passing. Only print the failure reason when returning non-zero.
+- **Don't print on success.** Silent = passing. The assertion macros handle failure output.

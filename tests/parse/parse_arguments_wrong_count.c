@@ -1,5 +1,5 @@
 #include "lib.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -7,15 +7,7 @@ int	main(void)
 	t_config	config;
 
 	config = (t_config){0};
-	if (parse_arguments(4, argv, &config))
-	{
-		printf("parse_arguments(4 args) expected 0, got 1");
-		return (1);
-	}
-	if (parse_arguments(7, argv, &config))
-	{
-		printf("parse_arguments(7 args) expected 0, got 1");
-		return (1);
-	}
+	ASSERT_FALSE(parse_arguments(4, argv, &config));
+	ASSERT_FALSE(parse_arguments(7, argv, &config));
 	return (0);
 }

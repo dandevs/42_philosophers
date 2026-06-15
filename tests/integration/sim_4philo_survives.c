@@ -1,6 +1,7 @@
 #include "lib.h"
 #include "table/table.h"
 #include "philosopher/utils.h"
+#include "ctest.h"
 #include <stdio.h>
 #include <unistd.h>
 
@@ -21,11 +22,7 @@ int	main(void)
 	config.time_to_die_ms = 410;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	philo_init_time(&table);
 	saved = dup(1);
 	freopen("/dev/null", "w", stdout);
@@ -51,12 +48,7 @@ int	main(void)
 	fflush(stdout);
 	dup2(saved, 1);
 	close(saved);
-	if (died)
-	{
-		printf("4 philos 410/200/200: a philosopher died within %dms",
-			WINDOW_MS);
-		return (1);
-	}
+	ASSERT_FALSE(died);
 	table_free(&table);
 	return (0);
 }

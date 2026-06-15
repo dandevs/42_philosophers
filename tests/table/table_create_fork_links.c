@@ -1,6 +1,6 @@
 #include "lib.h"
 #include "table/table.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -13,32 +13,17 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	i = 0;
 	while (i < config.philo_count)
 	{
-		if (table.philosophers[i].fork_left != &table.forks[i])
-		{
-			printf("philo %d fork_left != &forks[%d]", i, i);
-			return (1);
-		}
-		if (table.philosophers[i].fork_right
-			!= &table.forks[(i + 1) % config.philo_count])
-		{
-			printf("philo %d fork_right mismatch", i);
-			return (1);
-		}
+		ASSERT_EQ(table.philosophers[i].fork_left, &table.forks[i]);
+		ASSERT_EQ(table.philosophers[i].fork_right,
+			&table.forks[(i + 1) % config.philo_count]);
 		i++;
 	}
-	if (table.philosophers[config.philo_count - 1].fork_right != &table.forks[0])
-	{
-		printf("last philo fork_right should wrap to &forks[0]");
-		return (1);
-	}
+	ASSERT_EQ(table.philosophers[config.philo_count - 1].fork_right,
+		&table.forks[0]);
 	table_free(&table);
 	return (0);
 }

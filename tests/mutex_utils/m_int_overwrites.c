@@ -1,5 +1,5 @@
 #include "mutex_utils.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -11,12 +11,7 @@ int	main(void)
 	m_set_int(&value, 1, &mutex);
 	m_set_int(&value, 2, &mutex);
 	m_set_int(&value, 3, &mutex);
-	if (m_get_int(&value, &mutex) != 3)
-	{
-		printf("after 3 sets, m_get_int expected 3, got %d",
-			m_get_int(&value, &mutex));
-		return (1);
-	}
+	ASSERT_EQ(m_get_int(&value, &mutex), 3);
 	pthread_mutex_destroy(&mutex);
 	return (0);
 }

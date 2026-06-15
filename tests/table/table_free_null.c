@@ -1,6 +1,6 @@
 #include "lib.h"
 #include "table/table.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {

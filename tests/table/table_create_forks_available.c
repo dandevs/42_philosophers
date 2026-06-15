@@ -1,6 +1,6 @@
 #include "lib.h"
 #include "table/table.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -13,20 +13,11 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	i = 0;
 	while (i < config.philo_count)
 	{
-		if (table.forks[i].available != 1)
-		{
-			printf("forks[%d].available expected 1, got %d", i,
-				table.forks[i].available);
-			return (1);
-		}
+		ASSERT_EQ(table.forks[i].available, 1);
 		i++;
 	}
 	table_free(&table);

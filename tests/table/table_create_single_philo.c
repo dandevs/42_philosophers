@@ -1,6 +1,6 @@
 #include "lib.h"
 #include "table/table.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -12,16 +12,9 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
-	if (table.philosophers[0].fork_left != table.philosophers[0].fork_right)
-	{
-		printf("single philo: fork_left should equal fork_right");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
+	ASSERT_EQ(table.philosophers[0].fork_left,
+		table.philosophers[0].fork_right);
 	table_free(&table);
 	return (0);
 }

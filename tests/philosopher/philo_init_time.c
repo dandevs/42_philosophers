@@ -1,7 +1,7 @@
 #include "lib.h"
 #include "table/table.h"
 #include "philosopher/utils.h"
-#include <stdio.h>
+#include "ctest.h"
 
 int	main(void)
 {
@@ -16,34 +16,17 @@ int	main(void)
 	config.time_to_die_ms = 800;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 200;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	before = get_time_ms();
 	philo_init_time(&table);
 	after = get_time_ms();
-	if (table.start_time < before || table.start_time > after)
-	{
-		printf("start_time %lu not in [%lu, %lu]", table.start_time, before,
-			after);
-		return (1);
-	}
+	ASSERT_GE(table.start_time, before);
+	ASSERT_LE(table.start_time, after);
 	i = 0;
 	while (i < config.philo_count)
 	{
-		if (table.philosophers[i].time_began_eating != table.start_time)
-		{
-			printf("philo %d time_began_eating %lu != start_time %lu", i,
-				table.philosophers[i].time_began_eating, table.start_time);
-			return (1);
-		}
-		if (table.philosophers[i].start_time != table.start_time)
-		{
-			printf("philo %d start_time mismatch", i);
-			return (1);
-		}
+		ASSERT_EQ(table.philosophers[i].time_began_eating, table.start_time);
+		ASSERT_EQ(table.philosophers[i].start_time, table.start_time);
 		i++;
 	}
 	table_free(&table);

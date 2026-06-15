@@ -1,5 +1,6 @@
 #include "lib.h"
 #include "table/table.h"
+#include "ctest.h"
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
@@ -25,28 +26,16 @@ int	main(void)
 	config.time_to_die_ms = TTD;
 	config.time_to_eat_ms = 200;
 	config.time_to_sleep_ms = 100;
-	if (!table_create(&table, config))
-	{
-		printf("table_create returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(table_create(&table, config));
 	saved = dup(1);
 	freopen(CAPTURE_PATH, "w", stdout);
 	ret = table_main_routine(&table);
 	fflush(stdout);
 	dup2(saved, 1);
 	close(saved);
-	if (!ret)
-	{
-		printf("table_main_routine returned 0");
-		return (1);
-	}
+	ASSERT_TRUE(ret);
 	f = fopen(CAPTURE_PATH, "r");
-	if (!f)
-	{
-		printf("could not open capture file");
-		return (1);
-	}
+	ASSERT_NOT_NULL(f);
 	death_t = 0;
 	found = 0;
 	id = 0;
@@ -60,22 +49,9 @@ int	main(void)
 	}
 	fclose(f);
 	unlink(CAPTURE_PATH);
-	if (!found)
-	{
-		printf("no death message captured");
-		return (1);
-	}
-	if (death_t < (unsigned long)TTD)
-	{
-		printf("death at %lums before time_to_die %d", death_t, TTD);
-		return (1);
-	}
-	if (death_t > (unsigned long)TTD + 10)
-	{
-		printf("death delayed to %lums (more than 10ms after TTD %d)",
-			death_t, TTD);
-		return (1);
-	}
+	ASSERT_TRUE(found);
+	ASSERT_GE(death_t, (unsigned long)TTD);
+	ASSERT_LE(death_t, (unsigned long)TTD + 10);
 	table_free(&table);
 	return (0);
 }
