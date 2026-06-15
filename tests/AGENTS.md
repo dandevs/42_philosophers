@@ -50,8 +50,8 @@ Key rules:
 tests/
 ├── AGENTS.md              # This file
 └── suite_name/            # One directory per test suite
-    ├── test_behavior_a.c
-    ├── test_behavior_b.c
+    ├── behavior_a.c
+    ├── behavior_b.c
     └── ...
 ```
 
@@ -62,7 +62,7 @@ tests/
 ## Adding a New Suite
 
 1. Create a directory under `tests/`: `mkdir tests/my_feature`
-2. Add one or more `.c` test files: `tests/my_feature/test_basic.c`
+2. Add one or more `.c` test files: `tests/my_feature/basic.c`
 3. Run: `ctester`
 
 No other setup required.

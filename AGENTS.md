@@ -36,7 +36,7 @@ Each test is a standalone `.c` file with its own `main` (linked against `libproj
 
 ### Adding Tests
 1. `mkdir tests/my_suite`
-2. Add `.c` files: `tests/my_suite/test_basic.c`
+2. Add `.c` files: `tests/my_suite/my_test.c`
 3. Run: `ctester`
 
 ## File Map
