@@ -70,6 +70,11 @@ static void	unlock_both_forks(t_philosopher *philo)
 
 static int	philo_eat(t_philosopher *philo, t_config config)
 {
+	if (!m_get_int(&philo->table->alive, &philo->table->mutex))
+	{
+		unlock_both_forks(philo);
+		return (1);
+	}
 	m_set_ulong(&philo->time_began_eating, get_time_ms(), &philo->mutex);
 	philo_log(philo, "is eating");
 	usleep(config.time_to_eat_ms * 1000);

@@ -25,10 +25,12 @@ unsigned long	get_time_ms(void)
 
 void	philo_log(t_philosopher *philo, char *message)
 {
-	if (!m_get_int(&philo->table->alive, &philo->table->mutex))
-		return ;
+	int	alive;
+
 	pthread_mutex_lock(&philo->table->printf_mutex);
-	printf("%lu %d %s\n", get_time_ms() - philo->table->start_time,
-		philo->index + 1, message);
+	alive = m_get_int(&philo->table->alive, &philo->table->mutex);
+	if (alive)
+		printf("%lu %d %s\n", get_time_ms() - philo->table->start_time,
+			philo->index + 1, message);
 	pthread_mutex_unlock(&philo->table->printf_mutex);
 }

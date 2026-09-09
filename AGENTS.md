@@ -73,7 +73,7 @@ Each test is a standalone `.c` file with its own `main` (linked against `libproj
   - `m_set_ulong(unsigned long *ptr, unsigned long new_value, pthread_mutex_t *mutex)` / `m_get_ulong(unsigned long *ptr, pthread_mutex_t *mutex)`
   - Call sites look like `m_set_int(&philo->done, 1, &philo->mutex)`.
   - Type-safe: no `(void*)` casts, no size mismatch (the old `set_with_mutex` wrote `sizeof(void*)` bytes into `int` fields, corrupting adjacent memory on 64-bit — these replace it).
-- **`philo_log(philo, msg)`** (`src/utils.c`): no-op if `table->alive == 0`; else prints `<ms_since_start> <philo_id> <msg>\n` under `table->printf_mutex`. Philo id is `index + 1` (1-indexed).
+- **`philo_log(philo, msg)`** (`src/utils.c`): checks `table->alive` **inside** the `printf_mutex` section (lock printf → check alive → print), making check+print atomic with the monitor's death print — this is what guarantees `died` is the last message. Philo id is `index + 1` (1-indexed).
 - **`get_time_ms()`** (`src/utils.c`): `gettimeofday` → `tv.tv_sec * 1000 + tv.tv_usec / 1000`.
 - `POLLING_RATE = 100` (µs) defined in `lib.h`.
 
@@ -91,7 +91,7 @@ Shared forks MUST remain pointers (`t_fork *fork_left/right` in philo, `t_fork *
   - **No death self-check** in the routine — death is detected solely by the monitor. Philo loops only re-check `alive` (set by `stop_threads`).
 - **`get_both_forks`**: single-philo special case (`fork_left == fork_right`) logs one "has taken a fork" then busy-waits on `alive` until the monitor kills it (returns 0, loop breaks). Otherwise loops `try_lock_forks` until success or death.
 - **`try_lock_forks`** (no hold-and-wait): lock right→left fork mutexes, check both `available`; if both free set both `available = 0`, unlock both, log "has taken a fork" ×2, return 1; else unlock both, return 0. Because both mutexes are always taken/released together, no circular wait → no deadlock.
-- **`philo_eat`**: `time_began_eating = now` → log "is eating" → `usleep(time_to_eat)` → `unlock_both_forks` → `eat_count++` → if `meals_required != -1 && eat_count >= meals_required`, set `done = 1` and return 1.
+- **`philo_eat`**: first re-checks `table->alive` (if the monitor already declared death: `unlock_both_forks` and return 1 — a starved philo must not eat); else `time_began_eating = now` → log "is eating" → `usleep(time_to_eat)` → `unlock_both_forks` → `eat_count++` → if `meals_required != -1 && eat_count >= meals_required`, set `done = 1` and return 1.
 - **`unlock_both_forks`**: single-philo case busy-waits forever (it's dying); otherwise sets both `available = 1` under the fork mutexes.
 - Philosopher fields (`alive`, `eat_count`, `done`, `time_began_eating`) protected by per-philosopher `mutex`.
 - `philo_init` — sets `index`, `alive = 1`, `eat_count = 0`, `done = 0`, inits mutex.
@@ -110,7 +110,7 @@ Shared forks MUST remain pointers (`t_fork *fork_left/right` in philo, `t_fork *
 - **`someone_died`** → static `check_death` per philo: reads `time_began_eating` via `m_get_ulong`, `elapsed = now - time_began_eating`; if `elapsed >= time_to_die_ms`, sets `table->alive = 0` under table mutex, prints `"<t> <id> died\n"` under `printf_mutex`, returns 1. (Variable is named `last_meal` locally but reads `time_began_eating`.)
 - **`check_all_done`**: returns 0 immediately if `meals_required == -1`; else returns 1 only when every philo has `done == 1`.
 - **`stop_threads`**: sets `table->alive = 0`, sets each philo `alive = 0`, then `pthread_join`s every thread. After it returns, `table_main_routine` returns to `main`, which calls `table_free`.
-- Death is the **last printed message** (the `philo_log` no-op gate + `printf_mutex` ordering enforce this).
+- Death is the **last printed message** (`philo_log` checks `table->alive` inside the `printf_mutex` section, and `check_death` sets `alive = 0` before taking `printf_mutex` — so no log can follow the death print).
 
 ### Current State
 
