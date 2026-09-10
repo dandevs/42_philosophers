@@ -117,9 +117,8 @@ Shared forks MUST remain pointers (`t_fork *fork_left/right` in philo, `t_fork *
 - Simulation is **fully wired and working**. All four evaluator cases pass (see below): single-philo death, starvation death, `meals_required` clean stop, and 200-philosopher stress (no deadlock/crash/death over long runs).
 - Compiles clean under `-Wall -Wextra -Werror -pthread`.
 - **Remaining pre-evaluation tasks:**
-  - Uncomment the strict `CFLAGS` line in `Makefile`.
-  - Write the root `README.md` (italicized first line `*...by <login>*`, Description, Instructions, Resources).
   - Implement `philo_bonus/` (processes + semaphores, files named `*_bonus.{c,h}`).
+- Root `README.md` is written (Description / Instructions incl. `ctester` testing guide / Resources incl. AI usage).
 
 ## 42 Constraints
 
