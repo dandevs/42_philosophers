@@ -1,5 +1,5 @@
-# Compiled Object files
 *.o
+# Compiled Object files
 *.obj
 *.elf
 
@@ -18,9 +18,6 @@
 *.a
 *.lib
 
-# Executables
-philo
-philo_bonus
 *.exe
 *.out
 *.app
