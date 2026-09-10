@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/13 15:44:14 by danimend          #+#    #+#             */
-/*   Updated: 2026/06/14 00:00:00 by danimend         ###   ########.fr       */
+/*   Updated: 2026/09/10 17:41:11 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -14,6 +14,15 @@
 #include "fork.h"
 #include "philosopher/utils.h"
 #include <stdlib.h>
+
+static void	destroy_forks(t_table *table, int count)
+{
+	while (count > 0)
+	{
+		count--;
+		pthread_mutex_destroy(&table->forks[count].mutex);
+	}
+}
 
 static int	initialize_forks(t_table *table)
 {
@@ -27,6 +36,7 @@ static int	initialize_forks(t_table *table)
 	{
 		if (!fork_init(&table->forks[i]))
 		{
+			destroy_forks(table, i);
 			free(table->forks);
 			return (0);
 		}
@@ -35,7 +45,7 @@ static int	initialize_forks(t_table *table)
 	return (1);
 }
 
-static void	init_philosopher(t_table *table, int i)
+static int	init_philosopher(t_table *table, int i)
 {
 	t_philosopher	*philo;
 
@@ -43,7 +53,7 @@ static void	init_philosopher(t_table *table, int i)
 	philo->table = table;
 	philo->fork_left = &table->forks[i];
 	philo->fork_right = &table->forks[(i + 1) % table->config.philo_count];
-	philo_init(philo, i);
+	return (philo_init(philo, i));
 }
 
 int	table_create(t_table *table, t_config config)
@@ -55,18 +65,16 @@ int	table_create(t_table *table, t_config config)
 		return (0);
 	table->philosophers = malloc(sizeof(t_philosopher) * config.philo_count);
 	if (!table->philosophers)
-	{
-		free(table->forks);
-		return (0);
-	}
+		return (free(table->forks), 0);
 	i = 0;
 	while (i < config.philo_count)
 	{
-		init_philosopher(table, i);
-		i++;
+		if (!init_philosopher(table, i++))
+			return (0);
 	}
-	pthread_mutex_init(&table->printf_mutex, NULL);
-	pthread_mutex_init(&table->mutex, NULL);
+	if (pthread_mutex_init(&table->printf_mutex, NULL) != 0
+		|| pthread_mutex_init(&table->mutex, NULL) != 0)
+		return (0);
 	table->alive = 1;
 	return (1);
 }
